@@ -1,4 +1,7 @@
-import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
+import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools, getApiKeyByKey, sumApiKeyTokens } from "@/lib/localDb";
+import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
+import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { checkKeyLimits } from "./keyLimits.js";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
@@ -361,4 +364,37 @@ export function extractApiKey(request) {
 export async function isValidApiKey(apiKey) {
   if (!apiKey) return false;
   return await validateApiKey(apiKey);
+}
+
+/**
+ * Authorize a /v1 request by API key and enforce the key's limits.
+ * Returns a Response to send back (401/403/429) or null to continue.
+ * - No key / unknown key: refused only when settings.requireApiKey is on (unchanged behavior).
+ * - Known key: always checked (paused, expired, model allowlist, rpm, tpm, budget).
+ */
+export async function authorizeApiKey(apiKey, { model = null } = {}) {
+  const settings = await getSettings();
+
+  if (!apiKey) {
+    if (!settings.requireApiKey) return null;
+    log.warn("AUTH", "Missing API key (requireApiKey=true)");
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
+  }
+
+  const keyRow = await getApiKeyByKey(apiKey);
+  if (!keyRow) {
+    if (!settings.requireApiKey) return null;
+    log.warn("AUTH", "Invalid API key (requireApiKey=true)");
+    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+  }
+
+  const denied = await checkKeyLimits(keyRow, { model, sumTokens: sumApiKeyTokens });
+  if (!denied) return null;
+
+  log.warn("AUTH", `${keyRow.name || keyRow.id.slice(0, 8)} | ${denied.message}${model ? ` | model=${model}` : ""}`);
+  if (denied.retryAfterMs) {
+    const retryAt = new Date(Date.now() + denied.retryAfterMs).toISOString();
+    return unavailableResponse(denied.status, denied.message, retryAt, `retry after ${Math.ceil(denied.retryAfterMs / 1000)}s`);
+  }
+  return errorResponse(denied.status, denied.message);
 }
