@@ -1,3 +1,8 @@
+# Unreleased
+
+## Features
+- **API keys**: per-key limits — allowed models (with `*` wildcards), RPM/TPM, token budget per lifetime/daily/monthly period, and expiry. Configured in the Endpoint page create/edit modal and enforced on every `/v1/*` endpoint via `authorizeApiKey`. A paused key is now refused even when "Require API key" is off.
+
 # v0.5.111 (2026-10-26)
 
 ## Features
@@ -160,7 +165,7 @@
 - **Codebuddy**: parse the 6004 rate limit error and extract `resetsAtMs`; forward `recurring` for codebuddy-intl quota packs (#4422)
 - **CLI Tools**: replace `sk_9router` placeholder with first active dashboard API key
 - **Dashboard**: exclude hidden providers from usage stats provider list
-- **Capabilities**: add deepseek-v4-1-flash vision alias; add zed to live catalog providers
+- **Capabilities**: add deepseek-v4-1-flash vision alias; add zed to live catalog providers>>>>>>> 5bbed259 (docs(keys): document per-API-key limits)
 
 # v0.5.91 (2026-09-26)
 
@@ -293,6 +298,7 @@
 - **OpenCode Go**: track OpenCode Go quota (#3791) and send stable session headers (#3800)
 - **Logger**: suppress noisy background token refresh logs
 - **CLI**: export packed `.tgz` directly into workspace root instead of parent directory
+
 
 # v0.5.65 (2026-09-03)
 

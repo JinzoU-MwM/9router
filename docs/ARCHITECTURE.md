@@ -140,6 +140,7 @@ Primary state DB:
 - `src/lib/localDb.js`
 - file: `${DATA_DIR}/db.json` (or `~/.9router/db.json` when `DATA_DIR` is unset)
 - entities: providerConnections, providerNodes, modelAliases, combos, apiKeys, settings, pricing
+- `apiKeys.limits` (JSON, nullable): `{ allowedModels, rpm, tpm, tokenBudget, budgetPeriod, expiresAt }`, normalized by `normalizeLimits()` in `src/lib/db/repos/apiKeysRepo.js`. Enforced for every `/v1/*` handler by `authorizeApiKey()` (`src/sse/services/auth.js`) using the pure checks in `src/sse/services/keyLimits.js`; TPM and budget sums come from `usageHistory` (`sumApiKeyTokens`), RPM is an in-memory 60 s window.
 
 Usage DB:
 
