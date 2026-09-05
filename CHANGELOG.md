@@ -1,3 +1,8 @@
+# Unreleased
+
+## Features
+- **API keys**: per-key limits — allowed models (with `*` wildcards), RPM/TPM, token budget per lifetime/daily/monthly period, and expiry. Configured in the Endpoint page create/edit modal and enforced on every `/v1/*` endpoint via `authorizeApiKey`. A paused key is now refused even when "Require API key" is off.
+
 # v0.5.91 (2026-09-26)
 
 ## Features
@@ -128,6 +133,7 @@
 - **OpenCode Go**: track OpenCode Go quota (#3791) and send stable session headers (#3800)
 - **Logger**: suppress noisy background token refresh logs
 - **CLI**: export packed `.tgz` directly into workspace root instead of parent directory
+
 
 # v0.5.65 (2026-09-03)
 
