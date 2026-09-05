@@ -86,3 +86,17 @@ describe("apiKeys repo with limits", () => {
     expect((await db.getApiKeyById(plain.id)).limits).toBeNull();
   });
 });
+
+describe("sumApiKeyTokens", () => {
+  it("sums prompt+completion tokens for one key since a timestamp", async () => {
+    const now = Date.now();
+    const iso = (ms) => new Date(ms).toISOString();
+    await db.saveRequestUsage({ provider: "openai", model: "gpt-x", apiKey: "sk-sum-a", timestamp: iso(now - 120_000), tokens: { prompt_tokens: 100, completion_tokens: 50 } });
+    await db.saveRequestUsage({ provider: "openai", model: "gpt-x", apiKey: "sk-sum-a", timestamp: iso(now - 10_000), tokens: { prompt_tokens: 10, completion_tokens: 5 } });
+    await db.saveRequestUsage({ provider: "openai", model: "gpt-x", apiKey: "sk-sum-b", timestamp: iso(now - 10_000), tokens: { prompt_tokens: 999, completion_tokens: 1 } });
+
+    expect(await db.sumApiKeyTokens("sk-sum-a", iso(0))).toBe(165);
+    expect(await db.sumApiKeyTokens("sk-sum-a", iso(now - 60_000))).toBe(15);
+    expect(await db.sumApiKeyTokens("sk-sum-none", iso(0))).toBe(0);
+  });
+});
