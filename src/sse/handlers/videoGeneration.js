@@ -3,9 +3,9 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
-  isValidApiKey,
+  authorizeApiKey,
 } from "../services/auth.js";
-import { getSettings, getProviderConnectionById } from "@/lib/localDb";
+import { getProviderConnectionById } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { handleVideoProxyCore, getVideoConfig, sanitizeSecrets } from "open-sse/handlers/videoCore.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
@@ -41,15 +41,9 @@ const CREATE_ROTATION_STATUSES = new Set([
   HTTP_STATUS.RATE_LIMITED,
 ]);
 
-async function requireValidApiKey(request) {
-  const apiKey = extractApiKey(request);
-  const settings = await getSettings();
-  if (settings.requireApiKey) {
-    if (!apiKey) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
-    const valid = await isValidApiKey(apiKey);
-    if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-  }
-  return null;
+// Per-key limits need the requested model; poll/status calls have none and pass null.
+async function requireValidApiKey(request, model = null) {
+  return authorizeApiKey(extractApiKey(request), { model });
 }
 
 /**
@@ -107,11 +101,11 @@ function withConnectionHeader(response, connectionId) {
  * POST /v1/videos/{generations|edits|extensions} — async job creation proxy.
  */
 export async function handleVideoCreate(request, action) {
-  const authError = await requireValidApiKey(request);
-  if (authError) return authError;
-
   const bodyInfo = await readForwardableBody(request);
   if (bodyInfo.error) return bodyInfo.error;
+
+  const authError = await requireValidApiKey(request, bodyInfo.parsed?.model ?? null);
+  if (authError) return authError;
 
   const resolved = await resolveVideoProvider(bodyInfo.parsed);
   if (resolved.error) return resolved.error;
