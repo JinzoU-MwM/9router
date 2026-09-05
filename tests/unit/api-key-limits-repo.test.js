@@ -43,6 +43,7 @@ describe("normalizeLimits", () => {
     expect(() => db.normalizeLimits({ tpm: "abc" })).toThrow("Invalid tpm");
     expect(() => db.normalizeLimits({ budgetPeriod: "weekly" })).toThrow("Invalid budgetPeriod");
     expect(() => db.normalizeLimits({ expiresAt: "not-a-date" })).toThrow("Invalid expiresAt");
+    expect(() => db.normalizeLimits({ expiresAt: 123 })).toThrow("Invalid expiresAt");
     expect(() => db.normalizeLimits({ allowedModels: "openai/*" })).toThrow("Invalid allowedModels");
     expect(() => db.normalizeLimits([])).toThrow("Invalid limits");
   });

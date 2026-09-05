@@ -128,4 +128,17 @@ describe("checkKeyLimits", () => {
     const under = await checkKeyLimits(key(lim({ tokenBudget: 501 })), { model: "m", now: T0, sumTokens });
     expect(under).toBeNull();
   });
+
+  it("does not let concurrent requests slip past rpm while awaiting usage", async () => {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const sumTokens = async () => { await gate; return 0; };
+    const k = key(lim({ rpm: 1, tpm: 1000 }));
+    const p1 = checkKeyLimits(k, { model: "m", now: T0, sumTokens });
+    const p2 = checkKeyLimits(k, { model: "m", now: T0, sumTokens });
+    release();
+    const results = await Promise.all([p1, p2]);
+    expect(results.filter((r) => r === null)).toHaveLength(1);
+    expect(results.filter((r) => r?.status === 429 && r.message === "Rate limit exceeded (rpm)")).toHaveLength(1);
+  });
 });

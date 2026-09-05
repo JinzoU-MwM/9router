@@ -95,10 +95,16 @@ export async function POST(request, { params }) {
     // Convert Gemini request format to OpenAI/internal format
     const convertedBody = convertGeminiToInternal(body, model, stream);
 
-    // Create new request with converted body
+    // Gemini SDK clients send the router key as x-goog-api-key or ?key=. chat.js only reads
+    // Authorization / x-api-key, so surface it there for per-key limits and usage attribution.
+    const forwardHeaders = new Headers(request.headers);
+    if (!forwardHeaders.get("Authorization")) {
+      const clientKey = extractGeminiClientApiKey(request);
+      if (clientKey) forwardHeaders.set("Authorization", `Bearer ${clientKey}`);
+    }
     const newRequest = new Request(request.url, {
       method: "POST",
-      headers: request.headers,
+      headers: forwardHeaders,
       body: JSON.stringify(convertedBody),
     });
 

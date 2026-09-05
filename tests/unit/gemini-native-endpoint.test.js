@@ -249,6 +249,34 @@ describe("Gemini native v1beta endpoint", () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
+  it("forwards the Gemini client key to chat.js as Authorization on the converted path", async () => {
+    const body = {
+      contents: [{ parts: [{ text: "hello" }] }],
+      generationConfig: { temperature: 0.3 },
+    };
+
+    await POST(
+      makeGeminiRequest("gemini-2.5-flash:generateContent", body, {
+        Authorization: "",
+        "x-goog-api-key": "client-router-key",
+      }),
+      { params: Promise.resolve({ path: ["gemini-2.5-flash:generateContent"] }) }
+    );
+
+    expect(mocks.handleChat).toHaveBeenCalledTimes(1);
+    expect(mocks.handleChat.mock.calls[0][0].headers.get("Authorization")).toBe("Bearer client-router-key");
+
+    await POST(
+      makeGeminiRequest("gemini-2.5-flash:generateContent", body, {
+        Authorization: "Bearer explicit-key",
+        "x-goog-api-key": "client-router-key",
+      }),
+      { params: Promise.resolve({ path: ["gemini-2.5-flash:generateContent"] }) }
+    );
+
+    expect(mocks.handleChat.mock.calls[1][0].headers.get("Authorization")).toBe("Bearer explicit-key");
+  });
+
   it("does not hijack provider-prefixed non-Gemini audio requests", async () => {
     await POST(makeGeminiRequest("openai/gpt-4o-mini-tts:generateContent", audioBody()), {
       params: Promise.resolve({ path: ["openai", "gpt-4o-mini-tts:generateContent"] }),

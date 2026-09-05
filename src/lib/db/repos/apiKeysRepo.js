@@ -49,8 +49,8 @@ export function normalizeLimits(input) {
 
   let expiresAt = null;
   if (input.expiresAt) {
-    if (Number.isNaN(Date.parse(input.expiresAt))) throw new Error("Invalid expiresAt");
-    expiresAt = String(input.expiresAt);
+    if (typeof input.expiresAt !== "string" || Number.isNaN(Date.parse(input.expiresAt))) throw new Error("Invalid expiresAt");
+    expiresAt = input.expiresAt;
   }
 
   if (!allowedModels.length && rpm == null && tpm == null && tokenBudget == null && !expiresAt) return null;
