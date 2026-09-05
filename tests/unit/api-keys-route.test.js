@@ -45,6 +45,28 @@ describe("/api/keys", () => {
     expect(mocks.sumApiKeyTokens.mock.calls[0][0]).toBe("sk-b");
   });
 
+  it("GET still returns every key when one usage query fails", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      mocks.getApiKeys.mockResolvedValue([
+        { id: "a", key: "sk-a", name: "a", isActive: true, limits: { tokenBudget: 10, budgetPeriod: "lifetime" } },
+        { id: "b", key: "sk-b", name: "b", isActive: true, limits: { tokenBudget: 10, budgetPeriod: "lifetime" } },
+      ]);
+      mocks.sumApiKeyTokens.mockImplementation(async (apiKey) => {
+        if (apiKey === "sk-a") throw new Error("db down");
+        return 7;
+      });
+      const res = await GET();
+      expect(res.status).toBe(200);
+      const { keys } = await res.json();
+      expect(keys[0].usage).toBeNull();
+      expect(keys[1].usage.periodTokens).toBe(7);
+      expect(logSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it("POST normalizes limits and passes them to createApiKey", async () => {
     mocks.createApiKey.mockResolvedValue({ id: "n", key: "sk-n", name: "x", machineId: "machine-1", limits: { rpm: 5 } });
     const res = await POST(post({ name: "x", limits: { rpm: "5", allowedModels: [] } }));

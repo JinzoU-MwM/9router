@@ -12,8 +12,14 @@ export async function GET() {
     const withUsage = await Promise.all(keys.map(async (k) => {
       if (!k.limits?.tokenBudget) return k;
       const start = periodStart(k.limits.budgetPeriod || "lifetime");
-      const periodTokens = await sumApiKeyTokens(k.key, start);
-      return { ...k, usage: { periodTokens, periodStart: start } };
+      try {
+        const periodTokens = await sumApiKeyTokens(k.key, start);
+        return { ...k, usage: { periodTokens, periodStart: start } };
+      } catch (error) {
+        // One key's usage query must not take the whole list down.
+        console.log("Error summing key usage:", error);
+        return { ...k, usage: null };
+      }
     }));
     return NextResponse.json({ keys: withUsage });
   } catch (error) {
