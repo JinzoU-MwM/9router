@@ -314,6 +314,16 @@ export async function saveRequestUsage(entry) {
   }
 }
 
+/** Sum prompt+completion tokens recorded for an API key since an ISO timestamp (promptTokens is cache-inclusive). */
+export async function sumApiKeyTokens(apiKey, sinceIso) {
+  const db = await getAdapter();
+  const row = db.get(
+    `SELECT COALESCE(SUM(promptTokens + completionTokens), 0) AS total FROM usageHistory WHERE apiKey = ? AND timestamp >= ?`,
+    [apiKey, sinceIso]
+  );
+  return Number(row?.total || 0);
+}
+
 export async function getUsageHistory(filter = {}) {
   const db = await getAdapter();
   const conds = [];
