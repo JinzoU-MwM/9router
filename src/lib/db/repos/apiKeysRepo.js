@@ -2,6 +2,9 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { keyAccessFromColumns, keyAccessToColumns } from "@/shared/utils/keyAccess.js";
 import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
+import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+
+const BUDGET_PERIODS = new Set(["lifetime", "daily", "monthly"]);
 
 function rowToKey(row) {
   if (!row) return null;
@@ -13,7 +16,48 @@ function rowToKey(row) {
     isActive: row.isActive === 1 || row.isActive === true,
     createdAt: row.createdAt,
     access: keyAccessFromColumns(row.accessRestricted, row.accessAllow),
+    limits: parseJson(row.limits, null),
   };
+}
+
+function limitsToCol(limits) {
+  return limits ? stringifyJson(limits) : null;
+}
+
+function positiveIntOrNull(value, field) {
+  if (value === undefined || value === null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) throw new Error(`Invalid ${field}`);
+  return n === 0 ? null : n;
+}
+
+/**
+ * Validate + canonicalize a limits payload from the dashboard.
+ * Returns null when nothing is set (stored as SQL NULL). Throws Error("Invalid <field>") on bad input.
+ */
+export function normalizeLimits(input) {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== "object" || Array.isArray(input)) throw new Error("Invalid limits");
+
+  const rawModels = input.allowedModels ?? [];
+  if (!Array.isArray(rawModels) || rawModels.some((m) => typeof m !== "string")) throw new Error("Invalid allowedModels");
+  const allowedModels = [...new Set(rawModels.map((m) => m.trim()).filter(Boolean))];
+
+  const rpm = positiveIntOrNull(input.rpm, "rpm");
+  const tpm = positiveIntOrNull(input.tpm, "tpm");
+  const tokenBudget = positiveIntOrNull(input.tokenBudget, "tokenBudget");
+
+  const budgetPeriod = input.budgetPeriod || "lifetime";
+  if (!BUDGET_PERIODS.has(budgetPeriod)) throw new Error("Invalid budgetPeriod");
+
+  let expiresAt = null;
+  if (input.expiresAt) {
+    if (Number.isNaN(Date.parse(input.expiresAt))) throw new Error("Invalid expiresAt");
+    expiresAt = String(input.expiresAt);
+  }
+
+  if (!allowedModels.length && rpm == null && tpm == null && tokenBudget == null && !expiresAt) return null;
+  return { allowedModels, rpm, tpm, tokenBudget, budgetPeriod, expiresAt };
 }
 
 export async function getApiKeys() {
@@ -36,7 +80,7 @@ export async function getApiKeyByKey(key) {
   return rowToKey(row);
 }
 
-export async function createApiKey(name, machineId) {
+export async function createApiKey(name, machineId, limits = null, access = KEY_ACCESS_UNRESTRICTED) {
   if (!machineId) throw new Error("machineId is required");
   const db = await getAdapter();
   const { generateApiKeyWithMachine } = await import("@/shared/utils/apiKey");
@@ -48,12 +92,13 @@ export async function createApiKey(name, machineId) {
     machineId,
     isActive: true,
     createdAt: new Date().toISOString(),
-    access: { restricted: false, allow: [] },
+    access,
+    limits: limits || null,
   };
-  const cols = keyAccessToColumns(KEY_ACCESS_UNRESTRICTED);
+  const cols = keyAccessToColumns(apiKey.access);
   db.run(
-    `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt, accessRestricted, accessAllow) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt, cols.accessRestricted, cols.accessAllow]
+    `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt, accessRestricted, accessAllow, limits) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt, cols.accessRestricted, cols.accessAllow, limitsToCol(apiKey.limits)]
   );
   return apiKey;
 }
@@ -66,9 +111,10 @@ export async function updateApiKey(id, data) {
     if (!row) return;
     const merged = { ...rowToKey(row), ...data };
     const cols = keyAccessToColumns(merged.access);
+    if (!merged.limits) merged.limits = null;
     db.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, accessRestricted = ?, accessAllow = ? WHERE id = ?`,
-      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, cols.accessRestricted, cols.accessAllow, id]
+      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, accessRestricted = ?, accessAllow = ?, limits = ? WHERE id = ?`,
+      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, cols.accessRestricted, cols.accessAllow, limitsToCol(merged.limits), id]
     );
     result = rowToKey(db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]));
   });
