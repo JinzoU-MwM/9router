@@ -2,7 +2,7 @@ import {
   extractApiKey, authorizeApiKey,
   getProviderCredentials, markAccountUnavailable, clearAccountError,
 } from "../services/auth.js";
-import { getSettings, getCustomModels } from "@/lib/localDb";
+import { getCustomModels } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
 import { handleSttCore } from "open-sse/handlers/sttCore.js";
@@ -48,7 +48,6 @@ export async function handleStt(request) {
   const modelStr = formData.get("model");
   log.request("POST", `/v1/audio/transcriptions | ${modelStr}`);
 
-  const settings = await getSettings();
   const denied = await authorizeApiKey(extractApiKey(request), { model: modelStr });
   if (denied) return denied;
 

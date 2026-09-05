@@ -5,7 +5,6 @@ import {
   extractApiKey,
   authorizeApiKey,
 } from "../services/auth.js";
-import { getSettings } from "@/lib/localDb";
 import { getModelInfo } from "../services/model.js";
 import { getKeyAccessContext, enforceKeyAccessResolved } from "../services/keyAccess.js";
 import { handleEmbeddingsCore } from "open-sse/handlers/embeddingsCore.js";
@@ -53,7 +52,6 @@ export async function handleEmbeddings(request) {
   }
 
   // API key + per-key limits
-  const settings = await getSettings();
   const denied = await authorizeApiKey(apiKey, { model: modelStr });
   if (denied) return denied;
 
