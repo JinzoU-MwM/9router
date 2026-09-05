@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import PropTypes from "prop-types";
 import { Input, Button, ModelSelectModal } from "@/shared/components";
 
@@ -45,6 +45,7 @@ const fieldClass = "w-full px-3 py-2 rounded-lg border border-border bg-surface 
 const modelValue = (m) => (typeof m === "string" ? m : m?.value || m?.name || "");
 
 export default function KeyLimitsFields({ value, onChange, activeProviders = [], modelAliases = {} }) {
+  const uid = useId();
   const [showPicker, setShowPicker] = useState(false);
   const [pattern, setPattern] = useState("");
   const set = (patch) => onChange({ ...value, ...patch });
@@ -87,6 +88,7 @@ export default function KeyLimitsFields({ value, onChange, activeProviders = [],
             onChange={(e) => setPattern(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addPattern(); } }}
             placeholder="openai/*"
+            aria-label="Wildcard model pattern"
             className="flex-1 min-w-0 px-3 py-1 rounded-lg border border-border bg-surface text-sm font-mono"
           />
           <Button type="button" variant="ghost" size="sm" onClick={addPattern} disabled={!pattern.trim()}>
@@ -106,16 +108,16 @@ export default function KeyLimitsFields({ value, onChange, activeProviders = [],
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-text-main">Budget period</label>
-          <select value={value.budgetPeriod} onChange={(e) => set({ budgetPeriod: e.target.value })} disabled={value.tokenBudget === ""} className={fieldClass}>
+          <label htmlFor={`${uid}-period`} className="text-sm font-medium text-text-main">Budget period</label>
+          <select id={`${uid}-period`} value={value.budgetPeriod} onChange={(e) => set({ budgetPeriod: e.target.value })} disabled={value.tokenBudget === ""} className={fieldClass}>
             <option value="lifetime">Lifetime</option>
             <option value="daily">Daily</option>
             <option value="monthly">Monthly</option>
           </select>
         </div>
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-text-main">Expires</label>
-          <input type="date" value={value.expiresAt} onChange={(e) => set({ expiresAt: e.target.value })} className={fieldClass} />
+          <label htmlFor={`${uid}-expires`} className="text-sm font-medium text-text-main">Expires</label>
+          <input id={`${uid}-expires`} type="date" value={value.expiresAt} onChange={(e) => set({ expiresAt: e.target.value })} className={fieldClass} />
         </div>
       </div>
 

@@ -101,6 +101,12 @@ export async function checkKeyLimits(keyRow, { model = null, now = Date.now(), s
     }
   }
 
-  if (limits.rpm) recordRpmHit(keyRow.id, now);
+  if (limits.rpm) {
+    // Re-check after the awaits above: concurrent requests may have recorded hits meanwhile.
+    // Check and record back-to-back with no await in between so a burst cannot overshoot.
+    const r = checkRpm(keyRow.id, limits.rpm, now);
+    if (!r.allowed) return deny(HTTP_STATUS.RATE_LIMITED, "Rate limit exceeded (rpm)", r.retryAfterMs);
+    recordRpmHit(keyRow.id, now);
+  }
   return null;
 }
