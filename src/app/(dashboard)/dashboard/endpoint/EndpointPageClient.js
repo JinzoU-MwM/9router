@@ -18,6 +18,34 @@ import EndpointRow from "./components/EndpointRow";
 import StatusAlert from "./components/StatusAlert";
 import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
+import KeyLimitsFields, { EMPTY_LIMITS_FORM, limitsToForm, formToLimits } from "./KeyLimitsFields";
+
+const compactNumber = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+
+function limitsSummary(key) {
+  const l = key.limits;
+  if (!l) return "";
+  const parts = [];
+  if (l.rpm) parts.push(`${l.rpm} RPM`);
+  if (l.tpm) parts.push(`${compactNumber.format(l.tpm)} TPM`);
+  if (l.tokenBudget) parts.push(`${compactNumber.format(key.usage?.periodTokens || 0)} / ${compactNumber.format(l.tokenBudget)} tokens (${l.budgetPeriod || "lifetime"})`);
+  if (l.allowedModels?.length) parts.push(`${l.allowedModels.length} model${l.allowedModels.length === 1 ? "" : "s"}`);
+  if (l.expiresAt) parts.push(`expires ${String(l.expiresAt).slice(0, 10)}`);
+  return parts.join(" · ");
+}
+
+function isKeyExpired(key) {
+  const e = key.limits?.expiresAt;
+  if (!e) return false;
+  const end = /^\d{4}-\d{2}-\d{2}$/.test(e) ? new Date(`${e}T23:59:59.999`) : new Date(e);
+  return end.getTime() < Date.now();
+}
+
+function isBudgetExhausted(key) {
+  const b = key.limits?.tokenBudget;
+  return !!b && (key.usage?.periodTokens || 0) >= b;
+}
+
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,6 +53,11 @@ export default function APIPageClient({ machineId }) {
   const [newKeyName, setNewKeyName] = useState("");
   const [createdKey, setCreatedKey] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
+  const [editingKey, setEditingKey] = useState(null); // null = create mode
+  const [limitsForm, setLimitsForm] = useState(EMPTY_LIMITS_FORM);
+  const [keyFormError, setKeyFormError] = useState("");
+  const [activeProviders, setActiveProviders] = useState([]);
+  const [modelAliases, setModelAliases] = useState({});
 
   const [requireApiKey, setRequireApiKey] = useState(false);
   const [requireLogin, setRequireLogin] = useState(true);
@@ -77,6 +110,16 @@ export default function APIPageClient({ machineId }) {
 
   // API key visibility toggle state
   const [visibleKeys, setVisibleKeys] = useState(new Set());
+
+  // Feed the allowed-models picker (same sources ComboFormModal uses)
+  useEffect(() => {
+    fetch("/api/providers").then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setActiveProviders((d.connections || []).filter((c) => c.isActive !== false)))
+      .catch(() => {});
+    fetch("/api/models/alias").then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setModelAliases(d.aliases || {}))
+      .catch(() => {});
+  }, []);
 
   // Client-side local/remote detection (UI hint only, not a security gate)
   const [isRemoteHost, setIsRemoteHost] = useState(false);
@@ -614,25 +657,50 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
-  const handleCreateKey = async () => {
-    if (!newKeyName.trim()) return;
+  const openCreateKey = () => {
+    setEditingKey(null);
+    setNewKeyName("");
+    setLimitsForm({ ...EMPTY_LIMITS_FORM });
+    setKeyFormError("");
+    setShowAddModal(true);
+  };
 
+  const openEditKey = (key) => {
+    setEditingKey(key);
+    setNewKeyName(key.name || "");
+    setLimitsForm(limitsToForm(key.limits));
+    setKeyFormError("");
+    setShowAddModal(true);
+  };
+
+  const closeKeyModal = () => {
+    setShowAddModal(false);
+    setEditingKey(null);
+    setNewKeyName("");
+    setLimitsForm({ ...EMPTY_LIMITS_FORM });
+    setKeyFormError("");
+  };
+
+  const handleSaveKey = async () => {
+    if (!newKeyName.trim()) return;
+    const payload = { name: newKeyName.trim(), limits: formToLimits(limitsForm) };
     try {
-      const res = await fetch("/api/keys", {
-        method: "POST",
+      const res = await fetch(editingKey ? `/api/keys/${editingKey.id}` : "/api/keys", {
+        method: editingKey ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newKeyName }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
-
-      if (res.ok) {
-        setCreatedKey(data.key);
-        await fetchData();
-        setNewKeyName("");
-        setShowAddModal(false);
+      if (!res.ok) {
+        setKeyFormError(data.error || "Failed to save key");
+        return;
       }
+      if (!editingKey) setCreatedKey(data.key);
+      await fetchData();
+      closeKeyModal();
     } catch (error) {
-      console.log("Error creating key:", error);
+      console.log("Error saving key:", error);
+      setKeyFormError("Failed to save key");
     }
   };
 
@@ -962,7 +1030,7 @@ export default function APIPageClient({ machineId }) {
             <span className="material-symbols-outlined text-primary">vpn_key</span>
             API Keys
           </h2>
-          <Button icon="add" onClick={() => setShowAddModal(true)}>
+          <Button icon="add" onClick={openCreateKey}>
             Create Key
           </Button>
         </div>
@@ -993,7 +1061,7 @@ export default function APIPageClient({ machineId }) {
             </div>
             <p className="text-text-main font-medium mb-1">No API keys yet</p>
             <p className="text-sm text-text-muted mb-4">Create your first API key to get started</p>
-            <Button icon="add" onClick={() => setShowAddModal(true)}>
+            <Button icon="add" onClick={openCreateKey}>
               Create Key
             </Button>
           </div>
@@ -1031,11 +1099,27 @@ export default function APIPageClient({ machineId }) {
                   <p className="text-xs text-text-muted mt-1">
                     Created {new Date(key.createdAt).toLocaleDateString()}
                   </p>
+                  {limitsSummary(key) && (
+                    <p className="text-xs text-text-muted mt-1">{limitsSummary(key)}</p>
+                  )}
                   {key.isActive === false && (
                     <p className="text-xs text-orange-500 mt-1">Paused</p>
                   )}
+                  {isKeyExpired(key) && (
+                    <p className="text-xs text-red-500 mt-1">Expired</p>
+                  )}
+                  {isBudgetExhausted(key) && (
+                    <p className="text-xs text-red-500 mt-1">Budget exhausted</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => openEditKey(key)}
+                    className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded text-text-muted hover:text-primary transition-all"
+                    title="Edit key and limits"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                  </button>
                   <Toggle
                     size="sm"
                     checked={key.isActive ?? true}
@@ -1068,14 +1152,12 @@ export default function APIPageClient({ machineId }) {
         )}
       </Card>
 
-      {/* Add Key Modal */}
+      {/* Create / Edit Key Modal */}
       <Modal
         isOpen={showAddModal}
-        title="Create API Key"
-        onClose={() => {
-          setShowAddModal(false);
-          setNewKeyName("");
-        }}
+        title={editingKey ? "Edit API Key" : "Create API Key"}
+        onClose={closeKeyModal}
+        size="lg"
       >
         <div className="flex flex-col gap-4">
           <Input
@@ -1084,18 +1166,23 @@ export default function APIPageClient({ machineId }) {
             onChange={(e) => setNewKeyName(e.target.value)}
             placeholder="Production Key"
           />
+          <div className="border-t border-border pt-4">
+            <p className="text-sm font-medium text-text-main mb-3">
+              Limits <span className="text-text-muted font-normal">(optional)</span>
+            </p>
+            <KeyLimitsFields
+              value={limitsForm}
+              onChange={setLimitsForm}
+              activeProviders={activeProviders}
+              modelAliases={modelAliases}
+            />
+          </div>
+          {keyFormError && <p className="text-sm text-red-500">{keyFormError}</p>}
           <div className="flex gap-2">
-            <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim()}>
-              Create
+            <Button onClick={handleSaveKey} fullWidth disabled={!newKeyName.trim()}>
+              {editingKey ? "Save" : "Create"}
             </Button>
-            <Button
-              onClick={() => {
-                setShowAddModal(false);
-                setNewKeyName("");
-              }}
-              variant="ghost"
-              fullWidth
-            >
+            <Button onClick={closeKeyModal} variant="ghost" fullWidth>
               Cancel
             </Button>
           </div>
