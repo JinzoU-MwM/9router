@@ -29,6 +29,8 @@ const CUSTOM_PROMPTS = {
   "deepseek-v4-mod": "deepseek-v4-mod.md",
   "glm-5.3-flash-mod": "glm-5.3-flash-mod.md",
   "gpt-5.6-luna-mod": "gpt-5.6-luna-mod.md",
+  "gpt-5.6-terra-mod": "gpt-5.6-terra-mod.md",
+  "gpt-5.6-sol-mod": "gpt-5.6-sol-mod.md",
 };
 
 const cache = new Map(); // file → { mtime, text }
