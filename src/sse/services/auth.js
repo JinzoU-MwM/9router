@@ -1,7 +1,7 @@
 import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools, getApiKeyByKey, sumApiKeyTokens } from "@/lib/localDb";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
-import { checkKeyLimits } from "./keyLimits.js";
+import { checkKeyLimits, modelMatches } from "./keyLimits.js";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
 import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
@@ -343,6 +343,8 @@ export async function clearAccountError(connectionId, currentConnection, model =
  * Extract API key from request headers
  */
 export function extractApiKey(request) {
+  if (!request?.headers) return null;
+
   // Check Authorization header first
   const authHeader = request.headers.get("Authorization");
   if (authHeader?.startsWith("Bearer ")) {
@@ -355,7 +357,17 @@ export function extractApiKey(request) {
     return xApiKey;
   }
 
-  return null;
+  // Gemini SDK clients send the router key as x-goog-api-key or ?key=
+  const googleApiKey = request.headers.get("x-goog-api-key");
+  if (googleApiKey) {
+    return googleApiKey;
+  }
+
+  try {
+    return new URL(request.url).searchParams.get("key");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -397,4 +409,19 @@ export async function authorizeApiKey(apiKey, { model = null } = {}) {
     return unavailableResponse(denied.status, denied.message, retryAt, `retry after ${Math.ceil(denied.retryAfterMs / 1000)}s`);
   }
   return errorResponse(denied.status, denied.message);
+}
+
+/**
+ * Narrow a /v1/models listing to what the request's API key is allowed to use.
+ * The allowlist is enforced at chat time by checkKeyLimits; without this the
+ * catalog still advertised every model, so clients listed models they cannot call.
+ * No key, unknown key, or no allowedModels: list is returned unchanged.
+ */
+export async function filterModelsForApiKey(request, models) {
+  const apiKey = extractApiKey(request);
+  if (!apiKey) return models;
+  const keyRow = await getApiKeyByKey(apiKey);
+  const allowed = keyRow?.limits?.allowedModels;
+  if (!allowed?.length) return models;
+  return models.filter((m) => m?.id && modelMatches(m.id, allowed));
 }

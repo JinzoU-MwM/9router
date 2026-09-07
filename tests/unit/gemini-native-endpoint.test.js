@@ -7,22 +7,45 @@ const mocks = vi.hoisted(() => ({
   getProviderCredentials: vi.fn(),
   markAccountUnavailable: vi.fn(),
   clearAccountError: vi.fn(),
+  filterModelsForApiKey: vi.fn(),
+  getProviderConnections: vi.fn(),
+  getCombos: vi.fn(),
+  getCustomModels: vi.fn(),
+  getModelAliases: vi.fn(),
+  getDisabledModels: vi.fn(),
 }));
 
 vi.mock("@/sse/handlers/chat.js", () => ({
   handleChat: mocks.handleChat,
 }));
 
-vi.mock("@/sse/services/auth.js", () => ({
+const authMock = {
   getProviderCredentials: mocks.getProviderCredentials,
   authorizeApiKey: mocks.authorizeApiKey,
   markAccountUnavailable: mocks.markAccountUnavailable,
   clearAccountError: mocks.clearAccountError,
-}));
+  // Mirrors the real extractApiKey: Authorization, x-api-key, x-goog-api-key, ?key=
+  extractApiKey: (request) => {
+    const auth = request?.headers?.get("Authorization");
+    if (auth?.startsWith("Bearer ")) return auth.slice(7);
+    return request?.headers?.get("x-api-key")
+      || request?.headers?.get("x-goog-api-key")
+      || new URL(request.url).searchParams.get("key");
+  },
+  filterModelsForApiKey: mocks.filterModelsForApiKey,
+};
+vi.mock("@/sse/services/auth.js", () => authMock);
+vi.mock("@/sse/services/auth", () => authMock);
 
 vi.mock("@/lib/localDb", () => ({
   getSettings: mocks.getSettings,
+  getProviderConnections: mocks.getProviderConnections,
+  getCombos: mocks.getCombos,
+  getCustomModels: mocks.getCustomModels,
+  getModelAliases: mocks.getModelAliases,
 }));
+
+vi.mock("@/lib/disabledModelsDb", () => ({ getDisabledModels: mocks.getDisabledModels }));
 
 const { GET } = await import("../../src/app/api/v1beta/models/route.js");
 const { POST } = await import("../../src/app/api/v1beta/models/[...path]/route.js");
@@ -60,6 +83,12 @@ describe("Gemini native v1beta endpoint", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getSettings.mockResolvedValue({ requireApiKey: true });
+    mocks.getProviderConnections.mockResolvedValue([]);
+    mocks.getCombos.mockResolvedValue([]);
+    mocks.getCustomModels.mockResolvedValue([]);
+    mocks.getModelAliases.mockResolvedValue({});
+    mocks.getDisabledModels.mockResolvedValue({});
+    mocks.filterModelsForApiKey.mockImplementation((_request, models) => models);
     mocks.authorizeApiKey.mockResolvedValue(null);
     mocks.getProviderCredentials.mockResolvedValue({
       apiKey: "real-gemini-key",
@@ -87,6 +116,46 @@ describe("Gemini native v1beta endpoint", () => {
     expect(names).toContain("models/gemini-3.1-flash-tts-preview");
     expect(names).toContain("models/gemini-2.5-flash-preview-tts");
     expect(names).toContain("models/gemini-2.5-pro-preview-tts");
+  });
+
+  it("lists only the connection's enabledModels and hands the request to the key filter", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      {
+        id: "c1",
+        provider: "gemini",
+        isActive: true,
+        providerSpecificData: { enabledModels: ["gemini-2.5-pro"] },
+      },
+    ]);
+
+    const request = new Request("https://router.test/v1beta/models", {
+      headers: { "x-goog-api-key": "sk-router" },
+    });
+    const body = await (await GET(request)).json();
+    const names = body.models.map((m) => m.name);
+
+    expect(mocks.filterModelsForApiKey).toHaveBeenCalledWith(request, expect.any(Array));
+    expect(names).toEqual(["models/gemini/gemini-2.5-pro", "models/gemini-2.5-pro"]);
+  });
+
+  it("returns only what filterModelsForApiKey leaves, so a key allowlist narrows the list", async () => {
+    mocks.getProviderConnections.mockResolvedValue([
+      {
+        id: "c1",
+        provider: "gemini",
+        isActive: true,
+        providerSpecificData: { enabledModels: ["gemini-2.5-pro", "gemini-2.5-flash"] },
+      },
+    ]);
+    mocks.filterModelsForApiKey.mockImplementation((_request, models) =>
+      models.filter((m) => m.id === "gemini/gemini-2.5-flash")
+    );
+
+    const body = await (await GET(new Request("https://router.test/v1beta/models?key=sk-router"))).json();
+    expect(body.models.map((m) => m.name)).toEqual([
+      "models/gemini/gemini-2.5-flash",
+      "models/gemini-2.5-flash",
+    ]);
   });
 
   it("passes Gemini AUDIO generateContent requests through to Google's native endpoint", async () => {

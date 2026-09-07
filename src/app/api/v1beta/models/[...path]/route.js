@@ -1,6 +1,7 @@
 import { handleChat } from "@/sse/handlers/chat.js";
 import {
   clearAccountError,
+  extractApiKey,
   getProviderCredentials,
   authorizeApiKey,
   markAccountUnavailable,
@@ -99,7 +100,7 @@ export async function POST(request, { params }) {
     // Authorization / x-api-key, so surface it there for per-key limits and usage attribution.
     const forwardHeaders = new Headers(request.headers);
     if (!forwardHeaders.get("Authorization")) {
-      const clientKey = extractGeminiClientApiKey(request);
+      const clientKey = extractApiKey(request);
       if (clientKey) forwardHeaders.set("Authorization", `Bearer ${clientKey}`);
     }
     const newRequest = new Request(request.url, {
@@ -126,17 +127,6 @@ export async function POST(request, { params }) {
       { status: 500 }
     );
   }
-}
-
-function extractGeminiClientApiKey(request) {
-  const authHeader = request.headers.get("Authorization");
-  if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
-
-  const googleApiKey = request.headers.get("x-goog-api-key");
-  if (googleApiKey) return googleApiKey;
-
-  const url = new URL(request.url);
-  return url.searchParams.get("key");
 }
 
 function normalizeGeminiNativeModel(model) {
@@ -184,7 +174,7 @@ function buildGeminiNativeUrl(requestUrl, model, action) {
 
 // Only the native TTS forward authenticates here; the converted path goes through chat.js.
 async function validateGeminiNativeClientKey(request, model) {
-  return authorizeApiKey(extractGeminiClientApiKey(request), { model });
+  return authorizeApiKey(extractApiKey(request), { model });
 }
 
 function buildGeminiNativeAuthHeaders(credentials) {
