@@ -280,6 +280,17 @@ function buildCliPackage() {
     console.log("⏭️  No public folder found\n");
   }
 
+  // Step 4b: Copy persona prompt files (open-sse/rtk/customPrompt.js loads these at runtime).
+  console.log("4️⃣ b Copying prompt files...");
+  const promptsSrc = path.join(appDir, "prompts");
+  const promptsDest = path.join(cliDir, "prompts");
+  if (fs.existsSync(promptsSrc)) {
+    copyRecursive(promptsSrc, promptsDest);
+    console.log(`✅ Copied ${fs.readdirSync(promptsDest).length} prompt files\n`);
+  } else {
+    console.log("⏭️  No prompts dir found\n");
+  }
+
   // Step 6: Copy vendor-chunks (required for production)
   console.log("6️⃣  Copying vendor-chunks...");
   const vendorChunksSrc = path.join(appDir, ".next", "server", "vendor-chunks");
