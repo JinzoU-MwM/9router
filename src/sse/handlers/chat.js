@@ -261,6 +261,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const result = await handleChatCore({
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
+      requestModel: clientRawRequest?.body?.model || modelStr,
       credentials: refreshedCredentials,
       log,
       clientRawRequest,

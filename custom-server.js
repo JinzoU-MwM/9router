@@ -6,6 +6,11 @@ const { pathToFileURL } = require("url");
 
 const origCreate = http.createServer.bind(http);
 
+// App dir for runtime file loading (open-sse/rtk/customPrompt.js persona prompts).
+// Webpack bakes build-machine paths into bundled chunks, so modules must get the
+// real install location from the process, not from import.meta.url.
+global.__NINEROUTER_APP_DIR = __dirname;
+
 // Per-process secret proving x-9r-real-ip was stamped below rather than sent by the client.
 // A bare `next start` / `next dev` never loads this file, so it cannot produce a matching
 // header even though the env var is inherited by child processes. Named like x-9r-cli-token
