@@ -28,6 +28,7 @@ const CUSTOM_PROMPTS = {
   "kimi-k3-mod": "kimi-k3-mod.md",
   "deepseek-v4-mod": "deepseek-v4-mod.md",
   "glm-5.3-flash-mod": "glm-5.3-flash-mod.md",
+  "gpt-5.6-luna-mod": "gpt-5.6-luna-mod.md",
 };
 
 const cache = new Map(); // file → { mtime, text }
