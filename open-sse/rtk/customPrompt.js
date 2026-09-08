@@ -31,6 +31,7 @@ const CUSTOM_PROMPTS = {
   "gpt-5.6-luna-mod": "gpt-5.6-luna-mod.md",
   "gpt-5.6-terra-mod": "gpt-5.6-terra-mod.md",
   "gpt-5.6-sol-mod": "gpt-5.6-sol-mod.md",
+  "gemini-3.8-flash-mod": "gemini-3.8-flash-mod.md",
 };
 
 const cache = new Map(); // file → { mtime, text }
