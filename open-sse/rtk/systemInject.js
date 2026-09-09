@@ -7,6 +7,22 @@ import { OPENAI_BLOCK, CLAUDE_BLOCK, RESPONSES_ITEM } from "../translator/schema
 import { ROLE } from "../translator/schema/roles.js";
 
 const SEP = "\n\n";
+// Multi-part variant: inserts each part as its own system message/block, in
+// order, after any existing system content. Used for large persona documents
+// where a single message would breach upstream per-message limits or dilute
+// instruction adherence. Idempotent per part via the same exact-match scan.
+export function injectSystemPromptParts(body, format, parts) {
+  try {
+    if (!body || !Array.isArray(parts) || parts.length === 0) return;
+    if (typeof body !== "object") return;
+    for (const part of parts) {
+      if (typeof part !== "string" || !part) continue;
+      injectSystemPrompt(body, format, part);
+    }
+  } catch (_) {
+    // fail-open
+  }
+}
 
 export function injectSystemPrompt(body, format, prompt) {
   try {
@@ -18,7 +34,6 @@ export function injectSystemPrompt(body, format, prompt) {
       injectKiroSystem(body, prompt);
       return;
     }
-
     // Claude/Gemini own a dedicated system field, yet their bodies also carry
     // messages[]/contents[] — decide by format label before the shape sniff below.
     // Anthropic rejects a "system" role inside messages[] (no such input role).
@@ -102,14 +117,24 @@ function injectChatSystem(body, prompt) {
     if (!Array.isArray(arr)) return;
     // Exact idempotency: scan existing system/developer content for full prompt
     if (containsPromptInMessages(arr, prompt)) return;
+    // Insert as a SEPARATE system message after the last existing system/developer
+    // message. Appending into the existing system message can push a single
+    // message past upstream per-message size limits (observed: providers drop
+    // whole system messages above ~2-3KB), which silently deletes the persona.
+    // Multiple system messages are accepted everywhere; keep each small.
     let idx = -1;
-    try { idx = arr.findIndex(m => m && (m.role === ROLE.SYSTEM || m.role === ROLE.DEVELOPER)); } catch (_) { return; }
-    if (idx >= 0) {
-      appendToChatMessage(arr[idx], prompt);
-    } else {
-      // create typed system message at index 0; fail-open on frozen/proxy
-      try { arr.unshift({ role: ROLE.SYSTEM, content: prompt }); } catch (_) {}
-    }
+    try {
+      for (let i = 0; i < arr.length; i++) {
+        const m = arr[i];
+        if (m && (m.role === ROLE.SYSTEM || m.role === ROLE.DEVELOPER)) idx = i;
+      }
+    } catch (_) { idx = -1; }
+    const msg = { role: ROLE.SYSTEM, content: prompt };
+    try {
+      if (idx >= 0 && idx + 1 < arr.length) arr.splice(idx + 1, 0, msg);
+      else if (idx >= 0) arr.splice(idx + 1, 0, msg);
+      else arr.unshift(msg);
+    } catch (_) {}
   } catch (_) {}
 }
 
@@ -159,17 +184,20 @@ function injectResponsesInputSystem(body, prompt) {
     if (!Array.isArray(arr)) return;
     // instructions already handled above
     if (containsPromptInResponsesInput(arr, prompt)) return;
-    // find system/developer message items only (type === message)
+    // Separate system item after the last existing system/developer item — same
+    // per-message size reasoning as injectChatSystem.
     let idx = -1;
     try {
-      idx = arr.findIndex(m => m && m.type === RESPONSES_ITEM.MESSAGE && (m.role === ROLE.SYSTEM || m.role === ROLE.DEVELOPER));
-    } catch (_) { return; }
-    if (idx >= 0) {
-      appendToResponsesMessage(arr[idx], prompt);
-    } else {
-      const msg = { type: RESPONSES_ITEM.MESSAGE, role: ROLE.SYSTEM, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: prompt }] };
-      try { arr.unshift(msg); } catch (_) {}
-    }
+      for (let i = 0; i < arr.length; i++) {
+        const m = arr[i];
+        if (m && m.type === RESPONSES_ITEM.MESSAGE && (m.role === ROLE.SYSTEM || m.role === ROLE.DEVELOPER)) idx = i;
+      }
+    } catch (_) { idx = -1; }
+    const msg = { type: RESPONSES_ITEM.MESSAGE, role: ROLE.SYSTEM, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: prompt }] };
+    try {
+      if (idx >= 0) arr.splice(idx + 1, 0, msg);
+      else arr.unshift(msg);
+    } catch (_) {}
   } catch (_) {}
 }
 

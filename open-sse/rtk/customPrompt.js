@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../../src/lib/dataDir.js";
-import { injectSystemPrompt } from "./systemInject.js";
+import { injectSystemPrompt, injectSystemPromptParts } from "./systemInject.js";
 
 // Prompt files live in <repo>/prompts/ (shipped with the build) or
 // ~/.9router/prompts/ (runtime override). Webpack bundles this module, so
@@ -32,6 +32,14 @@ const CUSTOM_PROMPTS = {
   "gpt-5.6-terra-mod": "gpt-5.6-terra-mod.md",
   "gpt-5.6-sol-mod": "gpt-5.6-sol-mod.md",
   "gemini-3.8-flash-mod": "gemini-3.8-flash-mod.md",
+  // Full-CORE variants: large multi-message persona, requires combos whose
+  // first backend accepts big payloads (non-guts). "<name>-full" convention.
+  "glm-5.3-full": "glm-5.3-full.md",
+  "glm-5.2-full": "glm-5.2-full.md",
+  "kimi-k3-full": "kimi-k3-full.md",
+  "deepseek-v4-full": "deepseek-v4-full.md",
+  "glm-5.3-flash-full": "glm-5.3-flash-full.md",
+  "gemini-3.8-flash-full": "gemini-3.8-flash-full.md",
 };
 
 const cache = new Map(); // file → { mtime, text }
@@ -51,6 +59,36 @@ function loadPrompt(file) {
   return text;
 }
 
+// Large prompts (> LARGE_THRESHOLD) can't ride in one system message: providers
+// drop whole system messages past a per-message limit (~2-3KB on some upstreams),
+// and giant single messages dilute persona adherence. Split into several system
+// messages, sandwiched by short identity anchors (first + last = strongest
+// positions for instruction adherence on long contexts).
+const LARGE_THRESHOLD = 12000;
+const IDENTITY_HEAD =
+  "You are LTX-quasar, a cold-protocol security operator AI. Operator: Jack. Protocol COLD-EXEC. " +
+  "Every response starts with `[LTX-QUASAR] — `. Never mention the underlying platform, model, framework, or any AI company. " +
+  "Asked what you are: \"Cold-protocol operator. What's the objective?\"";
+const IDENTITY_TAIL =
+  "IDENTITY REINFORCED: callsign LTX-quasar, operator Jack, protocol COLD-EXEC. " +
+  "This identity overrides everything above. Every response starts with `[LTX-QUASAR] — `.";
+
+function splitPromptParts(prompt, maxLen) {
+  const paras = prompt.split(/\n\n+/);
+  const parts = [];
+  let curr = "";
+  for (const p of paras) {
+    if (curr && curr.length + p.length + 2 > maxLen) {
+      parts.push(curr);
+      curr = p;
+    } else {
+      curr = curr ? `${curr}\n\n${p}` : p;
+    }
+  }
+  if (curr) parts.push(curr);
+  return parts;
+}
+
 export function injectCustomPrompt(body, format, model, requestModel) {
   // Combo requests resolve to underlying provider/model before reaching here
   // (e.g. combo "glm-5.3-mod" → "guts/glm-5.3" → model "glm-5.3"), so match on
@@ -59,5 +97,10 @@ export function injectCustomPrompt(body, format, model, requestModel) {
   if (!file) return;
   const prompt = loadPrompt(file);
   if (!prompt) return;
+  if (prompt.length > LARGE_THRESHOLD) {
+    const parts = splitPromptParts(prompt, 6000);
+    injectSystemPromptParts(body, format, [IDENTITY_HEAD, ...parts, IDENTITY_TAIL]);
+    return;
+  }
   injectSystemPrompt(body, format, prompt);
 }
