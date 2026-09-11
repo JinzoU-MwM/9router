@@ -286,6 +286,7 @@ function buildCliPackage() {
   const promptsDest = path.join(cliDir, "prompts");
   if (fs.existsSync(promptsSrc)) {
     copyRecursive(promptsSrc, promptsDest);
+    copyRecursive(promptsSrc, path.join(cliAppDir, "prompts"));
     console.log(`✅ Copied ${fs.readdirSync(promptsDest).length} prompt files\n`);
   } else {
     console.log("⏭️  No prompts dir found\n");
