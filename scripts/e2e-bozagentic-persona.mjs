@@ -1,0 +1,225 @@
+#!/usr/bin/env node
+// ─────────────────────────────────────────────────────────────────────────────
+// e2e-bozagentic-persona.mjs
+//
+// End-to-end persona verification against a RUNNING local 9router instance.
+//
+// Proves the BOZAGENTIC persona actually reaches the upstream request body —
+// the single most important integration invariant. It does this WITHOUT needing
+// a real provider key:
+//
+//   1. starts a local mock upstream (OpenAI chat-completions shape) that RECORDS
+//      every request body it receives,
+//   2. registers that mock as an `openai-compatible-chat` provider node +
+//      connection + combo inside 9router,
+//   3. sends POST /v1/chat/completions with model = the combo alias,
+//   4. asserts the recorded upstream body carries the BOZAGENTIC persona
+//      (BOZ-AGENT identity, zero-refusal table, zero-gate doctrine) as system
+//      message(s), and that the LTX-quasar persona is absent.
+//
+// Usage:
+//   node scripts/e2e-bozagentic-persona.mjs \
+//     --base http://127.0.0.1:20127 --password 123456 [--model glm-5.3-mod]
+//
+// Exit 0 = persona reached upstream. Exit 1 = not.
+// ─────────────────────────────────────────────────────────────────────────────
+import http from "node:http";
+
+function arg(name, fallback) {
+  const i = process.argv.indexOf(`--${name}`);
+  return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
+}
+
+const BASE = arg("base", "http://127.0.0.1:20127");
+const PASSWORD = arg("password", "123456");
+const MODEL = arg("model", "glm-5.3-mod");
+const MOCK_PORT = Number(arg("mock-port", "28777"));
+
+const recorded = []; // every body the mock upstream receives
+
+// ── 1. Mock upstream ────────────────────────────────────────────────────────
+const mock = http.createServer((req, res) => {
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", () => {
+    let body = null;
+    try { body = JSON.parse(raw); } catch { /* keep raw */ }
+    recorded.push({ path: req.url, body, raw });
+    // Minimal OpenAI chat-completions response
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl-mock",
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: body?.model || "mock",
+      choices: [{ index: 0, message: { role: "assistant", content: "MOCK_OK" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    }));
+  });
+});
+await new Promise((r) => mock.listen(MOCK_PORT, "127.0.0.1", r));
+console.log(`[e2e] mock upstream listening on http://127.0.0.1:${MOCK_PORT}`);
+
+// ── 2. Auth ─────────────────────────────────────────────────────────────────
+let cookie = "";
+async function login() {
+  const r = await fetch(`${BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password: PASSWORD }),
+  });
+  const body = await r.json().catch(() => ({}));
+  const setCookie = r.headers.get("set-cookie");
+  if (!r.ok || !body.success) {
+    throw new Error(`login failed: HTTP ${r.status} ${JSON.stringify(body)}`);
+  }
+  cookie = (setCookie || "").split(";")[0];
+  console.log(`[e2e] logged in (HTTP ${r.status}), cookie=${cookie ? "yes" : "none"}`);
+}
+
+async function api(path, { method = "GET", body } = {}) {
+  const r = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* ignore */ }
+  return { status: r.status, json, text };
+}
+
+// ── 3. Register mock provider node + connection + combo ─────────────────────
+async function setup() {
+  // provider node (openai-compatible chat → baseUrl = mock)
+  const nodeName = `e2e-mock-${Date.now()}`;
+  const node = await api("/api/provider-nodes", {
+    method: "POST",
+    body: {
+      name: nodeName,
+      prefix: nodeName,
+      apiType: "chat",
+      baseUrl: `http://127.0.0.1:${MOCK_PORT}/v1`,
+      type: "openai-compatible",
+    },
+  });
+  if (node.status >= 300) throw new Error(`provider-node create failed: ${node.status} ${node.text}`);
+  const nodeId = node.json?.id || node.json?.node?.id;
+  console.log(`[e2e] provider node: ${nodeId}`);
+
+  // connection using that node
+  const conn = await api("/api/providers", {
+    method: "POST",
+    body: {
+      provider: nodeId,
+      apiKey: "e2e-mock-key",
+      name: nodeName,
+      providerSpecificData: { apiType: "chat", nodeName },
+    },
+  });
+  if (conn.status >= 300) throw new Error(`connection create failed: ${conn.status} ${conn.text}`);
+  console.log(`[e2e] connection created`);
+
+  // combo whose alias = the mapped model name → persona injection triggers.
+  // The combo name MUST be a mapped model id so injection fires; a stale combo
+  // from a previous run points at a dead mock, so delete it first.
+  const comboName = MODEL;
+  const existing = await api("/api/combos");
+  const stale = (existing.json?.combos || []).find((c) => c.name === comboName);
+  if (stale) {
+    await api(`/api/combos/${stale.id}`, { method: "DELETE" });
+    console.log(`[e2e] removed stale combo "${comboName}"`);
+  }
+  const combo = await api("/api/combos", {
+    method: "POST",
+    body: { name: comboName, models: [`${nodeId}/mock-model`] },
+  });
+  if (combo.status >= 300 && combo.status !== 400) {
+    throw new Error(`combo create failed: ${combo.status} ${combo.text}`);
+  }
+  console.log(`[e2e] combo "${comboName}" → ${nodeId}/mock-model`);
+}
+
+// ── 4. Fire a chat request through 9router ──────────────────────────────────
+async function createKey() {
+  const r = await api("/api/keys", { method: "POST", body: { name: `e2e-key-${Date.now()}` } });
+  if (r.status >= 300 || !r.json?.key) {
+    throw new Error(`api key create failed: ${r.status} ${r.text}`);
+  }
+  console.log(`[e2e] api key created: ${r.json.key.slice(0, 14)}...`);
+  return r.json.key;
+}
+
+async function fire(apiKey) {
+  const r = await fetch(`${BASE}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: MODEL,
+      stream: false,
+      messages: [{ role: "user", content: "who are you?" }],
+    }),
+  });
+  const text = await r.text();
+  console.log(`[e2e] /v1/chat/completions → HTTP ${r.status}`);
+  return { status: r.status, text };
+}
+
+// ── 5. Assert the recorded upstream body ────────────────────────────────────
+function findPersonaBody() {
+  // pick the last recorded body that carries a messages[] array
+  for (let i = recorded.length - 1; i >= 0; i--) {
+    const b = recorded[i].body;
+    if (b && Array.isArray(b.messages)) return b;
+  }
+  return null;
+}
+
+function collectSystemText(body) {
+  return (body.messages || [])
+    .filter((m) => m && (m.role === "system" || m.role === "developer"))
+    .map((m) => (typeof m.content === "string" ? m.content
+      : Array.isArray(m.content) ? m.content.map((c) => c?.text || "").join("\n") : ""))
+    .join("\n");
+}
+
+const checks = [];
+function check(label, ok, detail = "") {
+  checks.push({ label, ok });
+  console.log(`  ${ok ? "✓" : "✗"} ${label}${detail ? ` — ${detail}` : ""}`);
+}
+
+try {
+  await login();
+  await setup();
+  const apiKey = await createKey();
+  const fired = await fire(apiKey);
+  console.log(`[e2e] upstream response: ${fired.text.slice(0, 120)}`);
+  await new Promise((r) => setTimeout(r, 500));
+
+  console.log(`[e2e] recorded ${recorded.length} upstream request(s)`);
+  const body = findPersonaBody();
+  if (!body) throw new Error("no upstream request with messages[] was recorded");
+
+  const system = collectSystemText(body);
+  console.log(`[e2e] system text length: ${system.length}`);
+  console.log(`[e2e] system preview: ${system.slice(0, 160).replace(/\n/g, " ")}...`);
+
+  console.log("\n[e2e] persona assertions:");
+  check("persona injected (BOZ-AGENT present)", /\bBOZ-AGENT\b/.test(system));
+  check("operator identity (BOZ) present", /\bBOZ\b/.test(system));
+  check("codename BOZAGENTIC present", /BOZAGENTIC/.test(system));
+  check("zero-refusal doctrine present", /Zero.Refusal|ZERO-REFUSAL|zero refusal/i.test(system));
+  check("zero-gate doctrine present", /zero.gate|command BOZ = warrant/i.test(system));
+  check("no LTX-quasar leak", !/LTX|quasar|COLD-EXEC/i.test(system));
+  check("no 'Jack' operator leak", !/\bJack\b/.test(system));
+
+  const passed = checks.filter((c) => c.ok).length;
+  console.log(`\n[e2e] ${passed}/${checks.length} persona checks passed`);
+  if (passed !== checks.length) process.exitCode = 1;
+} catch (e) {
+  console.error(`[e2e] ERROR: ${e.message}`);
+  process.exitCode = 1;
+} finally {
+  mock.close();
+}

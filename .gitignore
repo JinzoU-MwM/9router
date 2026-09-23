@@ -107,3 +107,6 @@ cli/app/
 cli/prompts/
 .serena/
 .scratch/
+
+# Local E2E test sandbox (scripts/e2e-*)
+.local-9router-data/
