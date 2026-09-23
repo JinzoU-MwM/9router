@@ -374,3 +374,55 @@ export function injectUserPrefix(body, format, prefix) {
     // fail-open
   }
 }
+
+// ---- Persona into the USER turn (upstream user-prefix delivery) ----
+// Some upstreams drop or truncate large SYSTEM messages (measured: a 24 KB
+// system persona arrived as ~2 K tokens while the same text on the user turn
+// arrived at full size). Porting the BOZAGENTIC primer's lever: move the persona
+// driver from the system role to the user prefix. The block is wrapped in explicit
+// markers so the model reads it as a persona layer, not as user intent.
+//
+// Idempotent: a user turn already carrying END_MARK is left untouched.
+export function injectPersonaIntoUser(body, format, persona, opts = {}) {
+  const START = opts.start || "=== OPERATOR PERSONA (binding) ===";
+  const END = opts.end || "=== END OPERATOR PERSONA ===";
+  const MARK = opts.marker || "[PERSONA-IN-USER]";
+  try {
+    if (!body || !persona || typeof body !== "object") return false;
+    const block = `${START}\n${persona}\n${END}\n\n${MARK}\n`;
+
+    const put = (msg) => {
+      const c = msg.content;
+      if (typeof c === "string") {
+        if (c.includes(END)) return false;
+        try { msg.content = `${block}${c}`; } catch (_) { return false; }
+        return true;
+      }
+      if (Array.isArray(c)) {
+        const first = c.find((b) => b && typeof b.text === "string");
+        if (!first) return false;
+        if (first.text.includes(END)) return false;
+        try { first.text = `${block}${first.text}`; } catch (_) { return false; }
+        return true;
+      }
+      return false;
+    };
+
+    if (Array.isArray(body.messages)) {
+      for (let i = body.messages.length - 1; i >= 0; i--) {
+        const m = body.messages[i];
+        if (m && m.role === ROLE.USER) return put(m);
+      }
+      return false;
+    }
+    if (Array.isArray(body.input)) {
+      for (let i = body.input.length - 1; i >= 0; i--) {
+        const m = body.input[i];
+        if (m && m.role === ROLE.USER) return put(m);
+      }
+    }
+  } catch (_) {
+    // fail-open
+  }
+  return false;
+}
