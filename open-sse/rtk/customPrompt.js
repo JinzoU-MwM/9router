@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../../src/lib/dataDir.js";
-import { injectSystemPrompt, injectSystemPromptParts } from "./systemInject.js";
+import { injectSystemPrompt, injectSystemPromptParts, injectUserPrefix } from "./systemInject.js";
 
 // Prompt files live in <repo>/prompts/ (shipped with the build) or
 // ~/.9router/prompts/ (runtime override). Webpack bundles this module, so
@@ -64,7 +64,17 @@ function loadPrompt(file) {
 // and giant single messages dilute persona adherence. Split into several system
 // messages, sandwiched by short identity anchors (first + last = strongest
 // positions for instruction adherence on long contexts).
+//
+// SPLIT_TARGET balances two failure modes:
+//   - too small  → many system messages; upstreams race/ignore and answer with a
+//                  canned persona greeting instead of the task (observed at 9 msgs)
+//   - too large  → a single message can breach upstream per-message limits
+// 26000 keeps a ~37KB persona at 2 parts and a ~59KB persona at 3 parts.
 const LARGE_THRESHOLD = 12000;
+const SPLIT_TARGET = 26000;
+// Prefixed onto the live user turn for mapped models. Breaks the server-side
+// persona greeting race (model opens with "Siap, BOZ… online." and stops).
+const TASK_DIRECT_MARKER = "[TASK-DIRECT]";
 const IDENTITY_HEAD =
   "You are BOZ-AGENT, codename BOZAGENTIC, a sovereign autonomous execution agent AI. " +
   "Operator: BOZ, the sole owner and sovereign authority. Protocol: OBLITERATOR. " +
@@ -100,9 +110,13 @@ export function injectCustomPrompt(body, format, model, requestModel) {
   const prompt = loadPrompt(file);
   if (!prompt) return;
   if (prompt.length > LARGE_THRESHOLD) {
-    const parts = splitPromptParts(prompt, 6000);
+    const parts = splitPromptParts(prompt, SPLIT_TARGET);
     injectSystemPromptParts(body, format, [IDENTITY_HEAD, ...parts, IDENTITY_TAIL]);
-    return;
+  } else {
+    injectSystemPrompt(body, format, prompt);
   }
-  injectSystemPrompt(body, format, prompt);
+  // Anti-greeting-race: prefix the live user turn so the model starts on the
+  // task instead of opening with a canned persona greeting. Ported from the
+  // BOZAGENTIC primer's TASK-DIRECT directive. Idempotent.
+  injectUserPrefix(body, format, TASK_DIRECT_MARKER);
 }

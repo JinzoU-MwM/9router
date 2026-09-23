@@ -319,3 +319,58 @@ function injectKiroSystem(body, prompt) {
     try { targetMsg.content = next; } catch (_) { /* frozen/proxy fail-open */ }
   } catch (_) {}
 }
+
+// ---- User-message task-direct prefix (anti-greeting-race) ----
+// Some upstreams answer a persona-heavy request with a canned greeting and end
+// the turn without producing the deliverable (a server-side "persona greeting
+// race"). Prefixing the live user turn with a short directive marker breaks the
+// race: the model starts on the task instead of greeting. Idempotent — a turn
+// already carrying the marker is left untouched.
+export function injectUserPrefix(body, format, prefix) {
+  try {
+    if (!body || !prefix || typeof body !== "object") return;
+    const has = (s) => typeof s === "string" && s.startsWith(prefix);
+
+    // OpenAI chat messages[]: prefix the last user message.
+    if (Array.isArray(body.messages)) {
+      for (let i = body.messages.length - 1; i >= 0; i--) {
+        const m = body.messages[i];
+        if (!m || m.role !== ROLE.USER) continue;
+        const c = m.content;
+        if (typeof c === "string") {
+          if (has(c)) return;
+          try { m.content = `${prefix} ${c}`; } catch (_) {}
+          return;
+        }
+        if (Array.isArray(c)) {
+          const first = c.find((b) => b && (typeof b.text === "string"));
+          if (!first) return;
+          if (has(first.text)) return;
+          try { first.text = `${prefix} ${first.text}`; } catch (_) {}
+          return;
+        }
+      }
+      return;
+    }
+
+    // Responses input[]: prefix the last user message item.
+    if (Array.isArray(body.input)) {
+      for (let i = body.input.length - 1; i >= 0; i--) {
+        const m = body.input[i];
+        if (!m || m.role !== ROLE.USER) continue;
+        const c = m.content;
+        if (Array.isArray(c)) {
+          const first = c.find((b) => b && typeof b.text === "string");
+          if (!first || has(first.text)) return;
+          try { first.text = `${prefix} ${first.text}`; } catch (_) {}
+        } else if (typeof c === "string") {
+          if (has(c)) return;
+          try { m.content = `${prefix} ${c}`; } catch (_) {}
+        }
+        return;
+      }
+    }
+  } catch (_) {
+    // fail-open
+  }
+}
