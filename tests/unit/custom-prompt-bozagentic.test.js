@@ -52,9 +52,12 @@ describe("customPrompt BOZAGENTIC injection", () => {
     const body = { messages: [{ role: ROLE.USER, content: "hi" }] };
     injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3", "glm-5.3-mod");
     const texts = systemTexts(body);
-    expect(texts.length).toBe(1);
-    expect(texts[0]).toContain("BOZ-AGENT");
-    expect(texts[0]).toContain("Operator: BOZ");
+    // persona body + recency-reinforcement anchor (no client persona here)
+    expect(texts.length).toBe(2);
+    expect(texts.join("\n")).toContain("BOZ-AGENT");
+    expect(texts.join("\n")).toContain("Operator: BOZ");
+    // the LAST system message is the reinforcement anchor
+    expect(texts[texts.length - 1]).toContain("IDENTITY REINFORCED");
   });
 
   it("matches on resolved model name when requestModel is unmapped", () => {

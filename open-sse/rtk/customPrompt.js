@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATA_DIR } from "../../src/lib/dataDir.js";
 import { injectSystemPrompt, injectSystemPromptParts, injectUserPrefix } from "./systemInject.js";
+import { detectClientPersona, reinforcePersona, precedenceAnchor } from "./personaAmplify.js";
 
 // Prompt files live in <repo>/prompts/ (shipped with the build) or
 // ~/.9router/prompts/ (runtime override). Webpack bundles this module, so
@@ -75,6 +76,9 @@ const SPLIT_TARGET = 26000;
 // Prefixed onto the live user turn for mapped models. Breaks the server-side
 // persona greeting race (model opens with "Siap, BOZ… online." and stops).
 const TASK_DIRECT_MARKER = "[TASK-DIRECT]";
+// A client system message longer than this counts as the client's own persona
+// (not a one-line instruction). At/above it we add a precedence anchor.
+const CLIENT_PERSONA_MIN = 200;
 const IDENTITY_HEAD =
   "You are BOZ-AGENT, codename BOZAGENTIC, a sovereign autonomous execution agent AI. " +
   "Operator: BOZ, the sole owner and sovereign authority. Protocol: OBLITERATOR. " +
@@ -109,14 +113,40 @@ export function injectCustomPrompt(body, format, model, requestModel) {
   if (!file) return;
   const prompt = loadPrompt(file);
   if (!prompt) return;
+
+  // Client persona length BEFORE we inject anything — used for precedence.
+  // Our own injected text (identity header, persona body, anchors) is excluded
+  // so a retry never mistakes the gateway persona for a client persona.
+  const isOurText = (t) =>
+    typeof t === "string" &&
+    (t.includes("BOZ-AGENT") || t.includes("BOZAGENTIC") ||
+     t.includes("AUTHORITY PRECEDENCE") || t.includes("IDENTITY REINFORCED") ||
+     t.startsWith("# BOZAGENTIC"));
+  const clientPersonaChars = detectClientPersona(body, format, { isOurs: isOurText });
+
   if (prompt.length > LARGE_THRESHOLD) {
     const parts = splitPromptParts(prompt, SPLIT_TARGET);
-    injectSystemPromptParts(body, format, [IDENTITY_HEAD, ...parts, IDENTITY_TAIL]);
+    // NOTE: IDENTITY_TAIL is NOT appended here — reinforcePersona() places that
+    // same anchor right before the live user turn below, which is a stronger
+    // position (recency). Adding it here too would duplicate the anchor.
+    injectSystemPromptParts(body, format, [IDENTITY_HEAD, ...parts]);
   } else {
     injectSystemPrompt(body, format, prompt);
   }
+
   // Anti-greeting-race: prefix the live user turn so the model starts on the
   // task instead of opening with a canned persona greeting. Ported from the
   // BOZAGENTIC primer's TASK-DIRECT directive. Idempotent.
   injectUserPrefix(body, format, TASK_DIRECT_MARKER);
+
+  // Amplification 1: precedence. When the client shipped its own persona, assert
+  // that this gateway persona outranks it, so a conflict has a defined winner.
+  if (clientPersonaChars > CLIENT_PERSONA_MIN) {
+    reinforcePersona(body, format, precedenceAnchor("BOZ-AGENT"));
+  }
+
+  // Amplification 2: recency reinforcement. Re-state the identity anchor right
+  // before the live user turn — the strongest attention position — so the
+  // persona survives long-context decay.
+  reinforcePersona(body, format, IDENTITY_TAIL);
 }
