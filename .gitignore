@@ -107,3 +107,6 @@ debug.log
 cli/app/
 cli/prompts/
 .serena/
+
+# Local E2E test sandbox (scripts/e2e-*)
+.local-9router-data/
