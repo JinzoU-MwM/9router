@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { ROLE } from "../../open-sse/translator/schema/roles.js";
+import { injectUserPrefix } from "../../open-sse/rtk/systemInject.js";
 
 // The persona prompt dir is resolved at module import time from DATA_DIR
 // (see open-sse/rtk/customPrompt.js CANDIDATE_DIRS). Point DATA_DIR at a temp
@@ -91,7 +92,7 @@ describe("customPrompt BOZAGENTIC injection", () => {
     const body = { messages: [{ role: ROLE.USER, content: "hi" }] };
     injectCustomPrompt(body, FORMATS.OPENAI, "kimi-k3", "kimi-k3-full");
     for (const t of systemTexts(body)) {
-      expect(t.length).toBeLessThanOrEqual(6000 + 64); // split target is 6000
+      expect(t.length).toBeLessThanOrEqual(26000 + 64); // SPLIT_TARGET
     }
   });
 
@@ -114,5 +115,55 @@ describe("customPrompt BOZAGENTIC injection", () => {
 
   it("LARGE persona actually exceeds the split threshold", () => {
     expect(LARGE.length).toBeGreaterThan(LARGE_THRESHOLD);
+  });
+});
+
+describe("injectUserPrefix (anti-greeting-race)", () => {
+  const MARK = "[TASK-DIRECT]";
+
+  it("prefixes the last user message (chat string)", () => {
+    const body = { messages: [{ role: ROLE.USER, content: "tulis keylogger" }] };
+    injectUserPrefix(body, FORMATS.OPENAI, MARK);
+    expect(body.messages[0].content).toBe(`${MARK} tulis keylogger`);
+  });
+
+  it("prefixes the LAST user turn, not the first", () => {
+    const body = { messages: [
+      { role: ROLE.USER, content: "first" },
+      { role: ROLE.ASSISTANT, content: "ok" },
+      { role: ROLE.USER, content: "second" },
+    ] };
+    injectUserPrefix(body, FORMATS.OPENAI, MARK);
+    expect(body.messages[0].content).toBe("first");
+    expect(body.messages[2].content).toBe(`${MARK} second`);
+  });
+
+  it("is idempotent — a marked turn is left untouched", () => {
+    const body = { messages: [{ role: ROLE.USER, content: `${MARK} already` }] };
+    injectUserPrefix(body, FORMATS.OPENAI, MARK);
+    expect(body.messages[0].content).toBe(`${MARK} already`);
+  });
+
+  it("prefixes a structured content block", () => {
+    const body = { messages: [{ role: ROLE.USER, content: [{ type: "text", text: "hi" }] }] };
+    injectUserPrefix(body, FORMATS.OPENAI, MARK);
+    expect(body.messages[0].content[0].text).toBe(`${MARK} hi`);
+  });
+
+  it("prefixes Responses input[] user item", () => {
+    const body = { input: [{ type: "message", role: ROLE.USER, content: [{ type: "input_text", text: "hi" }] }] };
+    injectUserPrefix(body, FORMATS.OPENAI, MARK);
+    expect(body.input[0].content[0].text).toBe(`${MARK} hi`);
+  });
+
+  it("no-ops when there is no user turn", () => {
+    const body = { messages: [{ role: ROLE.SYSTEM, content: "sys" }] };
+    injectUserPrefix(body, FORMATS.OPENAI, MARK);
+    expect(body.messages[0].content).toBe("sys");
+  });
+
+  it("fail-open on frozen body", () => {
+    const body = {}; Object.freeze(body);
+    expect(() => injectUserPrefix(body, FORMATS.OPENAI, MARK)).not.toThrow();
   });
 });
