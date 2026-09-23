@@ -12,19 +12,27 @@ const SEP = "\n\n";
 const P1 = "CAVEMAN_TEST_PROMPT_AAA";
 const P2 = "PONYTAIL_TEST_PROMPT_BBB";
 
+// Contract note: injectSystemPrompt inserts the prompt as its OWN system message
+// (spliced after the last existing system/developer message) rather than appending
+// it into the caller's system message. Appending into one message can push it past
+// upstream per-message size limits (~2-3KB on some providers) and silently delete
+// the persona. The caller's original system message is never mutated.
 describe("system-inject chat messages", () => {
-  it("appends TEXT block to existing system string with SEP", () => {
+  it("inserts a separate system message after an existing system string", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: "hello" }, { role: ROLE.USER, content: "hi" }] };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    expect(body.messages[0].content).toBe(`hello${SEP}${P1}`);
+    expect(body.messages[0]).toEqual({ role: ROLE.SYSTEM, content: "hello" });
+    expect(body.messages[1]).toEqual({ role: ROLE.SYSTEM, content: P1 });
+    expect(body.messages[2].role).toBe(ROLE.USER);
   });
 
-  it("appends TEXT block to existing system array with OPENAI_BLOCK.TEXT never input_text", () => {
+  it("inserts a separate system message after an existing system array (never input_text)", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: [{ type: OPENAI_BLOCK.TEXT, text: "hello" }] }] };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    const arr = body.messages[0].content;
-    expect(arr[arr.length - 1]).toEqual({ type: OPENAI_BLOCK.TEXT, text: P1 });
-    expect(arr.some(c => c.type === "input_text")).toBe(false);
+    // original array untouched, separate message carries the prompt as a plain string
+    expect(body.messages[0].content).toEqual([{ type: OPENAI_BLOCK.TEXT, text: "hello" }]);
+    expect(body.messages[1]).toEqual({ role: ROLE.SYSTEM, content: P1 });
+    expect(body.messages.some(m => Array.isArray(m.content) && m.content.some(c => c.type === "input_text"))).toBe(false);
   });
 
   it("unshifts system message when no system/developer present", () => {
@@ -37,27 +45,28 @@ describe("system-inject chat messages", () => {
   it("handles developer role as system", () => {
     const body = { messages: [{ role: ROLE.DEVELOPER, content: "dev" }] };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    expect(body.messages[0].content).toBe(`dev${SEP}${P1}`);
+    expect(body.messages[0]).toEqual({ role: ROLE.DEVELOPER, content: "dev" });
+    expect(body.messages[1]).toEqual({ role: ROLE.SYSTEM, content: P1 });
   });
 
   it("exact full-prompt idempotency for chat string", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: "hello" }] };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    expect(body.messages[0].content).toBe(`hello${SEP}${P1}`);
+    expect(body.messages.filter(m => m.content === P1).length).toBe(1);
     // different prompt both apply
     injectSystemPrompt(body, FORMATS.OPENAI, P2);
-    expect(body.messages[0].content).toBe(`hello${SEP}${P1}${SEP}${P2}`);
+    expect(body.messages.some(m => m.content === P1)).toBe(true);
+    expect(body.messages.some(m => m.content === P2)).toBe(true);
   });
 
   it("exact full-prompt idempotency for chat array", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: [{ type: OPENAI_BLOCK.TEXT, text: "hello" }] }] };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    const texts = body.messages[0].content.filter(c => c.text === P1);
-    expect(texts.length).toBe(1);
+    expect(body.messages.filter(m => m.content === P1).length).toBe(1);
     injectSystemPrompt(body, FORMATS.OPENAI, P2);
-    expect(body.messages[0].content.filter(c => c.text === P2).length).toBe(1);
+    expect(body.messages.filter(m => m.content === P2).length).toBe(1);
   });
 
   it("never uses first-100 fingerprint: long prompt exact idempotency", () => {
@@ -66,17 +75,17 @@ describe("system-inject chat messages", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: "base" }] };
     injectSystemPrompt(body, FORMATS.OPENAI, longA);
     injectSystemPrompt(body, FORMATS.OPENAI, longB);
-    expect(body.messages[0].content).toContain(longA);
-    expect(body.messages[0].content).toContain(longB);
+    expect(body.messages.some(m => m.content === longA)).toBe(true);
+    expect(body.messages.some(m => m.content === longB)).toBe(true);
     // retry same longA is idempotent
     injectSystemPrompt(body, FORMATS.OPENAI, longA);
-    const countA = body.messages[0].content.split(longA).length - 1;
+    const countA = body.messages.filter(m => m.content === longA).length;
     expect(countA).toBe(1);
   });
 });
 
 describe("system-inject responses input[]", () => {
-  it("modifies only type: message system/developer and preserves non-message order", () => {
+  it("inserts a separate system message item and preserves non-message order", () => {
     const body = {
       input: [
         { type: RESPONSES_ITEM.FUNCTION_CALL, call_id: "c1", name: "fn" },
@@ -87,22 +96,24 @@ describe("system-inject responses input[]", () => {
     };
     const before = JSON.parse(JSON.stringify(body.input));
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    // length unchanged except injection inside message
-    expect(body.input.length).toBe(before.length);
+    // one extra item inserted right after the existing system message
+    expect(body.input.length).toBe(before.length + 1);
     expect(body.input[0]).toEqual(before[0]);
-    expect(body.input[2]).toEqual(before[2]);
-    expect(body.input[3]).toEqual(before[3]);
-    // system message got INPUT_TEXT appended
-    const sys = body.input[1];
-    expect(sys.content[sys.content.length - 1]).toEqual({ type: RESPONSES_ITEM.INPUT_TEXT, text: P1 });
+    expect(body.input[1]).toEqual(before[1]); // original system message untouched
+    expect(body.input[2]).toEqual({ type: RESPONSES_ITEM.MESSAGE, role: ROLE.SYSTEM, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: P1 }] });
+    // non-message items keep their relative order after the inserted message
+    expect(body.input[3]).toEqual(before[2]);
+    expect(body.input[4]).toEqual(before[3]);
   });
 
-  it("appends INPUT_TEXT to array content", () => {
+  it("inserts a separate typed system message item", () => {
     const body = { input: [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "hi" }] }, { type: RESPONSES_ITEM.MESSAGE, role: ROLE.SYSTEM, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "base" }] }] };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    const sys = body.input.find(m => m.role === ROLE.SYSTEM);
-    expect(sys.content[sys.content.length - 1].type).toBe(RESPONSES_ITEM.INPUT_TEXT);
-    expect(sys.content[sys.content.length - 1].text).toBe(P1);
+    const injected = body.input[body.input.length - 1];
+    expect(injected.type).toBe(RESPONSES_ITEM.MESSAGE);
+    expect(injected.role).toBe(ROLE.SYSTEM);
+    expect(injected.content[0].type).toBe(RESPONSES_ITEM.INPUT_TEXT);
+    expect(injected.content[0].text).toBe(P1);
   });
 
   it("creates typed message at index 0 if absent preserving order", () => {
@@ -131,10 +142,11 @@ describe("system-inject responses input[]", () => {
     const body = { input: [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.SYSTEM, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "base" }] }] };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    const sys = body.input[0];
-    expect(sys.content.filter(c => c.text === P1).length).toBe(1);
+    const countP1 = body.input.filter(m => Array.isArray(m.content) && m.content.some(c => c.text === P1)).length;
+    expect(countP1).toBe(1);
     injectSystemPrompt(body, FORMATS.OPENAI, P2);
-    expect(sys.content.filter(c => c.text === P2).length).toBe(1);
+    const countP2 = body.input.filter(m => Array.isArray(m.content) && m.content.some(c => c.text === P2)).length;
+    expect(countP2).toBe(1);
   });
 });
 
@@ -161,8 +173,10 @@ describe("system-inject dispatch by wire shape", () => {
   it("messages[] means Chat even when format is openai-responses label", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: "hi" }] };
     injectSystemPrompt(body, FORMATS.OPENAI_RESPONSES, P1);
-    // should still treat as Chat because messages present
-    expect(body.messages[0].content).toBe(`hi${SEP}${P1}`);
+    // should still treat as Chat because messages present — separate system message
+    expect(body.messages[0]).toEqual({ role: ROLE.SYSTEM, content: "hi" });
+    expect(body.messages[1]).toEqual({ role: ROLE.SYSTEM, content: P1 });
+    expect(body.input).toBeUndefined();
   });
   it("input[] means Responses even when format is openai", () => {
     const body = { input: [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "hi" }] }] };
@@ -377,13 +391,16 @@ describe("system-inject regression fixes", () => {
   it("kiro shape gate: stray conversationState without history/currentMessage does not hijack chat body", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: "hello" }], conversationState: {} };
     injectSystemPrompt(body, FORMATS.OPENAI, P1);
-    expect(body.messages[0].content).toBe(`hello${SEP}${P1}`);
+    // treated as Chat, not Kiro — separate system message inserted
+    expect(body.messages[0]).toEqual({ role: ROLE.SYSTEM, content: "hello" });
+    expect(body.messages[1]).toEqual({ role: ROLE.SYSTEM, content: P1 });
   });
 
   it("substring occurrence does not suppress injection (exact SEP-delimited idempotency)", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: "You are RULE follower" }] };
     injectSystemPrompt(body, FORMATS.OPENAI, "RULE");
-    expect(body.messages[0].content).toBe(`You are RULE follower${SEP}RULE`);
+    // separate system message, caller's message untouched — substring never suppresses
+    expect(body.messages[1]).toEqual({ role: ROLE.SYSTEM, content: "RULE" });
   });
 
   it("instructions substring occurrence does not suppress injection", () => {
@@ -464,10 +481,14 @@ describe("system-inject fail-open", () => {
   it("different caveman and ponytail prompts both apply", () => {
     const body = { messages: [{ role: ROLE.SYSTEM, content: "base" }] };
     injectCaveman(body, FORMATS.OPENAI, "full");
-    const afterCaveman = body.messages[0].content;
-    expect(afterCaveman).toContain(CAVEMAN_PROMPTS.full.slice(0, 30));
+    // each prompt lands as its own system message; caller's message untouched
+    expect(body.messages[0]).toEqual({ role: ROLE.SYSTEM, content: "base" });
+    const texts = body.messages.filter(m => typeof m.content === "string").map(m => m.content);
+    expect(texts.some(t => t.includes(CAVEMAN_PROMPTS.full.slice(0, 30)))).toBe(true);
     injectPonytail(body, FORMATS.OPENAI, "full");
-    expect(body.messages[0].content).toContain(PONYTAIL_PROMPTS.full.slice(0, 30));
-    expect(body.messages[0].content).toContain(afterCaveman);
+    const texts2 = body.messages.filter(m => typeof m.content === "string").map(m => m.content);
+    expect(texts2.some(t => t.includes(PONYTAIL_PROMPTS.full.slice(0, 30)))).toBe(true);
+    expect(texts2.some(t => t.includes(CAVEMAN_PROMPTS.full.slice(0, 30)))).toBe(true);
+    expect(body.messages[0]).toEqual({ role: ROLE.SYSTEM, content: "base" });
   });
 });
