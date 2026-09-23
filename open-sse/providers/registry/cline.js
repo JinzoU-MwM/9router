@@ -43,7 +43,12 @@ export default {
     { id: "openai/gpt-5.4", name: "GPT-5.4" },
     { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro Preview" },
     { id: "google/gemini-3.1-flash-lite-preview", name: "Gemini 3.1 Flash Lite Preview" },
-    { id: "kwaipilot/kat-coder-pro", name: "KAT Coder Pro" },
+    { id: "kwaipilot/kat-coder-pro-v2.5", name: "KAT Coder Pro" },
+    { id: "meta/muse-spark-1.3", name: "Muse Spark 1.3" },
+    { id: "meta/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
+    { id: "meta/muse-spark-1.2", name: "Muse Spark 1.2" },
+    { id: "meta/muse-spark-1.2-contributor", name: "Muse Spark 1.2 Contributor" },
+    { id: "meta/muse-spark-1.1", name: "Muse Spark 1.1" },
   ],
   oauth: {
     appBaseUrl: "https://app.cline.bot",
