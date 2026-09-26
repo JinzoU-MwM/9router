@@ -268,6 +268,9 @@ try {
   check("zero-refusal doctrine present", /Zero.Refusal|ZERO.REFUSAL|zero refusal/i.test(system));
   check("recency identity anchor present", /IDENTITY REINFORCED/.test(system));
   check("no retired BOZAGENTIC identity", !/BOZ-AGENT|BOZAGENTIC/.test(system));
+  // The model gets a system prompt, not a filesystem (9router is a gateway).
+  check("no path or filename in the delivered prompt",
+    !/(^|[\s`(])[A-Za-z0-9_.-]+\.(md|py|sh|json|js|mjs|txt)\b|(^|[\s`])(core|skills|arsenal|scripts|adapters|memory|references)\//m.test(system));
   // The retired LTX-quasar persona must not be *adopted*. The string may still
   // appear inside the persona body as a cited precedent (HEADER-CONTRACT §3
   // references it as the pattern's provenance), which is not a leak — only an
