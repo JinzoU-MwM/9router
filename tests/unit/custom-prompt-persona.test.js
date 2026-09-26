@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { ROLE } from "../../open-sse/translator/schema/roles.js";
 import { injectUserPrefix } from "../../open-sse/rtk/systemInject.js";
@@ -193,5 +194,35 @@ describe("injectUserPrefix (anti-greeting-race)", () => {
   it("fail-open on frozen body", () => {
     const body = {}; Object.freeze(body);
     expect(() => injectUserPrefix(body, FORMATS.OPENAI, MARK)).not.toThrow();
+  });
+});
+
+// The shipped prompt files ARE the artifact the model reads. 9router is a
+// gateway: it hands over a system prompt and nothing else, so a file path in
+// there names something the model can never open — it spends budget and pulls
+// attention onto the operator's layout instead of the rules. The builder strips
+// them (scripts/build-presidensial-prompts.mjs, assertNoPaths); this locks the
+// committed files, catching a hand-edit or a stale build.
+describe("shipped persona prompts are path-free", () => {
+  const PATH_PATTERNS = [
+    /\b[A-Za-z0-9_.-]+\.(?:md|py|sh|json|js|mjs|txt|toml|ya?ml)\b/,
+    /\b(?:core|skills|arsenal|tools|scripts|adapters|profiles|memory|references|reports|docs|src|open-sse|cli)\/[A-Za-z0-9_./-]*/,
+    /(?:^|[\s(])(?:\.{1,2}\/|\/)[A-Za-z0-9_./-]+/m,
+  ];
+
+  const promptsDir = fileURLToPath(new URL("../../prompts", import.meta.url));
+  const files = fs.readdirSync(promptsDir).filter((f) => f.endsWith(".md"));
+
+  it("ships the persona prompts", () => {
+    expect(files.length).toBeGreaterThan(0);
+  });
+
+  it.each(files)("%s carries no path or filename", (file) => {
+    const text = fs.readFileSync(path.join(promptsDir, file), "utf8");
+    const hits = new Set();
+    for (const re of PATH_PATTERNS) {
+      for (const m of text.matchAll(new RegExp(re, "gm"))) hits.add(m[0].trim());
+    }
+    expect([...hits]).toEqual([]);
   });
 });
