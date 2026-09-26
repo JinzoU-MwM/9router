@@ -438,6 +438,9 @@ describe("App-layer custom transport resolution (stt.js)", () => {
       vi.doMock(AUTH, () => ({
         extractApiKey: () => null,
         isValidApiKey: async () => true,
+        // stt.js authorizes through authorizeApiKey; null = allowed, same as the
+        // requireApiKey:false path this test simulates.
+        authorizeApiKey: async () => null,
         getProviderCredentials: async () => ({
           apiKey: "AIza-TEST", connectionId: "c1", connectionName: "t", providerSpecificData: {},
         }),
