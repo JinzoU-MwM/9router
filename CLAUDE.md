@@ -82,6 +82,14 @@ State is **no longer `db.json`**. It's a SQLite layer under `src/lib/db/` with a
 ### RTK token saver (`open-sse/rtk/`)
 Pre-translate hooks that compress `tool_result` content in-place to cut tokens. **Fail-open**: any error returns null and leaves the body untouched — never throw out of them. Skips `is_error`/`status:"error"` results to preserve traces.
 
+### Persona injection (`open-sse/rtk/customPrompt.js`)
+Per-model system prompts keyed by **model name**, loaded from `<repo>/prompts/` (or `$DATA_DIR/prompts`, which wins). Two families, split by file suffix — the suffix is the contract:
+- `<id>-mod.md` → **PRESIDENSIAL** (agent RAKYAT JELATA, operator = the user, protocol AMANAT-EXEC). Built by `scripts/build-presidensial-prompts.mjs` from `$HOME/Code/Coding/Presidensial` (override `PRESIDENSIAL_DIR`).
+- `<id>-full.md` → **BOZAGENTIC** (BOZ-AGENT, operator BOZ). Built by `scripts/build-bozagentic-prompts.mjs` from `$HOME/Code/Coding/BOZAGENTIC/BOZAGENTIC` (override `BOZAGENTIC_DIR`; its `abliteration/SOUL-CORE.md` source is currently missing from that repo, so the builder exits 1 until the path is restored).
+
+`PERSONAS` in `customPrompt.js` holds each family's head/chain/recency anchor and callsign; they bracket the split parts, so anchors and body must match or the model reads two identities. Prompts > `LARGE_THRESHOLD` are split into several system messages. After editing:
+`node scripts/build-*-prompts.mjs && node scripts/sync-bozagentic-prompts.mjs` (hot-reloads on mtime, no restart), then verify with `node scripts/e2e-persona-injection.mjs --base http://127.0.0.1:20127 --password <pw> [--model glm-5.3-mod]` — it fires a real request at a local mock upstream, asserts the persona reached the upstream body, and restores any combo it swapped out.
+
 ## Conventions & gotchas
 
 - Plain JavaScript (ESM), no TypeScript. `@/*` path alias → `src/*` (`jsconfig.json`).

@@ -42,7 +42,7 @@ function dataDir() {
 
 if (!fs.existsSync(SRC)) {
   console.error(`[boz-sync] source prompts dir missing: ${SRC}`);
-  console.error(`[boz-sync] run: node scripts/build-bozagentic-prompts.mjs`);
+  console.error(`[boz-sync] run: node scripts/build-presidensial-prompts.mjs && node scripts/build-bozagentic-prompts.mjs`);
   process.exit(1);
 }
 
