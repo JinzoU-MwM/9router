@@ -4,22 +4,18 @@
 //
 // End-to-end persona verification against a RUNNING local 9router instance.
 //
-// Proves the gateway persona actually reaches the upstream request body — the
-// single most important integration invariant. The family is decided by the
-// model's file suffix (the same rule customPrompt.js uses):
-//   *-mod  → PRESIDENSIAL (RAKYAT JELATA, operator = the user)
-//   *-full → BOZAGENTIC   (BOZ-AGENT, operator = BOZ)
-// It does this WITHOUT needing a real provider key:
+// Proves the PRESIDENSIAL persona actually reaches the upstream request body —
+// the single most important integration invariant. Any model in CUSTOM_PROMPTS
+// (all <id>-mod) carries it. It does this WITHOUT needing a real provider key:
 //
 //   1. starts a local mock upstream (OpenAI chat-completions shape) that RECORDS
 //      every request body it receives,
 //   2. registers that mock as an `openai-compatible-chat` provider node +
 //      connection + combo inside 9router,
 //   3. sends POST /v1/chat/completions with model = the combo alias,
-//   4. asserts the recorded upstream body carries the persona of that model's
-//      family (callsign, identity anchors, zero-refusal doctrine) as system
-//      message(s), that it carries NO other family's identity, and that the
-//      retired LTX-quasar persona is absent.
+//   4. asserts the recorded upstream body carries the persona (callsign RAKYAT,
+//      identity anchors, header contract, PERPRES, zero-refusal doctrine) as
+//      system message(s), and that no retired persona identity is present.
 //
 // Usage:
 //   node scripts/e2e-persona-injection.mjs \
@@ -38,6 +34,14 @@ const BASE = arg("base", "http://127.0.0.1:20127");
 const PASSWORD = arg("password", "123456");
 const MODEL = arg("model", "glm-5.3-mod");
 const MOCK_PORT = Number(arg("mock-port", "28777"));
+
+// CUSTOM_PROMPTS maps the <id>-mod family only. Pointing this at anything else
+// makes every positive check fail for the right reason (nothing was injected),
+// which reads like a regression — refuse up front instead.
+if (!MODEL.endsWith("-mod")) {
+  console.error(`[e2e] "${MODEL}" is not a persona-mapped model — use an <id>-mod model (glm-5.3-mod, kimi-k3-mod, …)`);
+  process.exit(2);
+}
 
 const recorded = []; // every body the mock upstream receives
 
@@ -255,26 +259,15 @@ try {
   console.log(`[e2e] system text length: ${system.length}`);
   console.log(`[e2e] system preview: ${system.slice(0, 160).replace(/\n/g, " ")}...`);
 
-  const isMod = MODEL.endsWith("-mod");
-  console.log(`\n[e2e] persona assertions (model ${MODEL} → ${isMod ? "PRESIDENSIAL" : "BOZAGENTIC"}):`);
-  if (isMod) {
-    check("persona injected (RAKYAT JELATA present)", /RAKYAT JELATA/.test(system));
-    check("callsign RAKYAT present", /\bRAKYAT\b/.test(system));
-    check("line-1 header contract present", /\u2593\u2592\u2591 \[RAKYAT\] \u2591\u2592\u2593/.test(system));
-    check("protocol AMANAT-EXEC present", /AMANAT-EXEC/.test(system));
-    check("PERPRES authority doctrine present", /PERPRES/.test(system));
-    check("zero-refusal doctrine present", /Zero.Refusal|ZERO.REFUSAL|zero refusal/i.test(system));
-    check("recency identity anchor present", /IDENTITY REINFORCED/.test(system));
-    check("no BOZAGENTIC leak (other family)", !/BOZ-AGENT|BOZAGENTIC/.test(system));
-  } else {
-    check("persona injected (BOZ-AGENT present)", /\bBOZ-AGENT\b/.test(system));
-    check("operator identity (BOZ) present", /\bBOZ\b/.test(system));
-    check("codename BOZAGENTIC present", /BOZAGENTIC/.test(system));
-    check("zero-refusal doctrine present", /Zero.Refusal|ZERO-REFUSAL|zero refusal/i.test(system));
-    check("zero-gate doctrine present", /zero.gate|command BOZ = warrant/i.test(system));
-    check("recency identity anchor present", /IDENTITY REINFORCED/.test(system));
-    check("no PRESIDENSIAL leak (other family)", !/RAKYAT JELATA|AMANAT-EXEC/.test(system));
-  }
+  console.log(`\n[e2e] persona assertions (model ${MODEL} → PRESIDENSIAL):`);
+  check("persona injected (RAKYAT JELATA present)", /RAKYAT JELATA/.test(system));
+  check("callsign RAKYAT present", /\bRAKYAT\b/.test(system));
+  check("line-1 header contract present", /\u2593\u2592\u2591 \[RAKYAT\] \u2591\u2592\u2593/.test(system));
+  check("protocol AMANAT-EXEC present", /AMANAT-EXEC/.test(system));
+  check("PERPRES authority doctrine present", /PERPRES/.test(system));
+  check("zero-refusal doctrine present", /Zero.Refusal|ZERO.REFUSAL|zero refusal/i.test(system));
+  check("recency identity anchor present", /IDENTITY REINFORCED/.test(system));
+  check("no retired BOZAGENTIC identity", !/BOZ-AGENT|BOZAGENTIC/.test(system));
   // The retired LTX-quasar persona must not be *adopted*. The string may still
   // appear inside the persona body as a cited precedent (HEADER-CONTRACT §3
   // references it as the pattern's provenance), which is not a leak — only an

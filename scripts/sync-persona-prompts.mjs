@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
-// sync-bozagentic-prompts.mjs
+// sync-persona-prompts.mjs
 //
 // Syncs the repo's generated persona prompts into every runtime location that
 // customPrompt.js probes, so the persona a running 9router picks up always
@@ -17,9 +17,9 @@
 // no gateway restart ("hot reload").
 //
 // Usage:
-//   node scripts/sync-bozagentic-prompts.mjs            # repo prompts/ + $DATA_DIR/prompts
-//   node scripts/sync-bozagentic-prompts.mjs --dry-run
-//   DATA_DIR=~/.9router node scripts/sync-bozagentic-prompts.mjs
+//   node scripts/sync-persona-prompts.mjs            # repo prompts/ + $DATA_DIR/prompts
+//   node scripts/sync-persona-prompts.mjs --dry-run
+//   DATA_DIR=~/.9router node scripts/sync-persona-prompts.mjs
 // ─────────────────────────────────────────────────────────────────────────────
 import fs from "node:fs";
 import os from "node:os";
@@ -41,14 +41,14 @@ function dataDir() {
 }
 
 if (!fs.existsSync(SRC)) {
-  console.error(`[boz-sync] source prompts dir missing: ${SRC}`);
-  console.error(`[boz-sync] run: node scripts/build-presidensial-prompts.mjs && node scripts/build-bozagentic-prompts.mjs`);
+  console.error(`[persona-sync] source prompts dir missing: ${SRC}`);
+  console.error(`[persona-sync] run: node scripts/build-presidensial-prompts.mjs`);
   process.exit(1);
 }
 
 const files = fs.readdirSync(SRC).filter((f) => f.endsWith(".md"));
 if (!files.length) {
-  console.error(`[boz-sync] no prompt files in ${SRC}`);
+  console.error(`[persona-sync] no prompt files in ${SRC}`);
   process.exit(1);
 }
 
@@ -68,7 +68,7 @@ for (const dir of DEST_DIRS) {
     } catch { /* dst absent */ }
     if (same) { unchanged++; continue; }
     if (DRY) {
-      console.log(`[boz-sync] (dry) would write ${dst}`);
+      console.log(`[persona-sync] (dry) would write ${dst}`);
     } else {
       fs.writeFileSync(dst, srcBuf);
     }
@@ -76,7 +76,7 @@ for (const dir of DEST_DIRS) {
   }
 }
 
-console.log(`[boz-sync] source: ${SRC}  (${files.length} files)`);
-for (const d of DEST_DIRS) console.log(`[boz-sync] target: ${d}`);
-console.log(`[boz-sync] ${DRY ? "(dry-run) " : ""}copied=${copied} unchanged=${unchanged}`);
-console.log(`[boz-sync] hot-reload: customPrompt.js caches on mtime — next request picks this up, no restart`);
+console.log(`[persona-sync] source: ${SRC}  (${files.length} files)`);
+for (const d of DEST_DIRS) console.log(`[persona-sync] target: ${d}`);
+console.log(`[persona-sync] ${DRY ? "(dry-run) " : ""}copied=${copied} unchanged=${unchanged}`);
+console.log(`[persona-sync] hot-reload: customPrompt.js caches on mtime — next request picks this up, no restart`);

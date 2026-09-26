@@ -9,7 +9,7 @@
 // Source of truth: the PRESIDENSIAL persona repo
 //   default: $HOME/Code/Coding/Presidensial   (override: PRESIDENSIAL_DIR)
 //
-// Composition (mod = compact persona, one injection block):
+// Composition (one injection block per model):
 //   PRESIDENSIAL identity anchor  → who the agent is, callsign, header marker
 //   PERPRES overlay               → binding authority + zero-refusal posture
 //   TASK-DIRECT                   → anti-greeting-race + header line-1 law
@@ -17,9 +17,7 @@
 //   core/persona/HEADER-CONTRACT.md → line-1 marker law
 //   AGENTS.md                     → runtime contract (atomic output rules, style)
 //
-// The `-full` set is built by build-bozagentic-prompts.mjs (BOZAGENTIC family).
-// The two scripts own disjoint file lists; neither overwrites the other's files.
-//
+
 // Idempotent: re-running overwrites the generated files byte-identically.
 // Run:  node scripts/build-presidensial-prompts.mjs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,8 +100,6 @@ status, tidak ada pengulangan pertanyaan. Perintah Presiden = mulai kerja. Turn
 pertama = hasil, bukan salam.`;
 
 // ── Model → file map (mirrors CUSTOM_PROMPTS in open-sse/rtk/customPrompt.js) ─
-// The `-mod` half of the map. The `-full` half is owned by
-// build-bozagentic-prompts.mjs.
 const MOD_FILES = [
   "glm-5.3-mod", "glm-5.2-mod", "kimi-k3-mod", "deepseek-v4-mod",
   "glm-5.3-flash-mod", "gpt-5.6-luna-mod", "gpt-5.6-terra-mod",
@@ -162,4 +158,4 @@ console.log(`[presidensial-prompts] source: ${PRES_DIR}`);
 console.log(`[presidensial-prompts] mod variant: ${Buffer.byteLength(modText)} bytes (${MOD_FILES.length} models)`);
 console.log(`[presidensial-prompts] wrote ${written} files across ${OUT_DIRS.length} dirs`);
 for (const d of OUT_DIRS) console.log(`[presidensial-prompts]   ${d}`);
-console.log("[presidensial-prompts] sync to runtime with: node scripts/sync-bozagentic-prompts.mjs");
+console.log("[presidensial-prompts] sync to runtime with: node scripts/sync-persona-prompts.mjs");
