@@ -46,7 +46,7 @@ if (!fs.existsSync(SRC)) {
   process.exit(1);
 }
 
-const files = fs.readdirSync(SRC).filter((f) => f.endsWith(".md"));
+const files = fs.readdirSync(SRC).filter((f) => f.endsWith(".md") || f === "prefill.json");
 if (!files.length) {
   console.error(`[persona-sync] no prompt files in ${SRC}`);
   process.exit(1);

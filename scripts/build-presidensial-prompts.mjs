@@ -169,6 +169,43 @@ function calibrationFor(family) {
   return `\n## KALIBRASI KELUARGA: ${family.toUpperCase()}\n\n${note}\n`;
 }
 
+// ── Prefill (few-shot priming) ──────────────────────────────────────────────
+// The persona repo ships the worked example used for priming: the model is not
+// told the marker contract, it is shown one. Only the user→assistant pairs are
+// carried over — the leading system entry restates an identity the payload
+// already owns — and the result is normalised to a plain [{role, content}]
+// array so the gateway loader stays trivial.
+function readPrefill() {
+  const p = path.join(PRES_DIR, "core/persona/prefill.json");
+  if (!fs.existsSync(p)) {
+    console.warn("[presidensial-prompts] no prefill source — priming stays disabled");
+    return null;
+  }
+  let raw;
+  try {
+    raw = JSON.parse(fs.readFileSync(p, "utf8"));
+  } catch (err) {
+    console.error(`[presidensial-prompts] prefill is not valid JSON: ${err.message}`);
+    process.exit(1);
+  }
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.turns) ? raw.turns : [];
+  const turns = list
+    .filter((t) => t && (t.role === "user" || t.role === "assistant")
+      && typeof t.content === "string" && t.content.trim())
+    .map((t) => ({ role: t.role, content: t.content }));
+  // Must be complete user→assistant pairs, or the model reads a dangling ask.
+  const pairs = Math.floor(turns.length / 2);
+  if (pairs < 1) {
+    console.error("[presidensial-prompts] prefill carries no complete user/assistant pair");
+    process.exit(1);
+  }
+  const kept = turns.slice(0, pairs * 2);
+  assertNoPaths(JSON.stringify(kept));
+  return `${JSON.stringify(kept, null, 1)}\n`;
+}
+
+const prefillText = readPrefill();
+
 // ── Identity header ─────────────────────────────────────────────────────────
 // Leads the prompt so the first thing the model reads is who it is and what the
 // platform prefixes the live turn with. Uses the same callsign, operator and
@@ -228,6 +265,10 @@ for (const dir of OUT_DIRS) {
     fs.writeFileSync(path.join(dir, `${id}.md`), modText);
     written++;
     families.set(id, familyFor(id));
+  }
+  if (prefillText) {
+    fs.writeFileSync(path.join(dir, "prefill.json"), prefillText);
+    written++;
   }
 }
 

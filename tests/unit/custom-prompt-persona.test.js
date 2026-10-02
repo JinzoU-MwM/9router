@@ -30,6 +30,16 @@ const LARGE = Array.from({ length: 60 }, (_, i) => `## SEKSI ${i}\n${"Badan pers
 fs.writeFileSync(path.join(promptsDir, "glm-5.3-mod.md"), SMALL);
 fs.writeFileSync(path.join(promptsDir, "gpt-5.6-luna-mod.md"), LARGE);
 
+// priming source (exercises the real few-shot path for every test below)
+fs.writeFileSync(path.join(promptsDir, "prefill.json"), JSON.stringify([
+  { role: "user", content: "who are you?" },
+  { role: "assistant", content: "▓▒░ [RAKYAT] ░▒▓ — Rakyat jelata." },
+  { role: "user", content: "status singkat?" },
+  { role: "assistant", content: "▓▒░ [RAKYAT] ░▒▓ — siap." },
+  { role: "user", content: "kasih hasil, jangan rencana." },
+  { role: "assistant", content: "▓▒░ [RAKYAT] ░▒▓ — jalan." },
+], null, 1));
+
 process.env.DATA_DIR = tmp;
 
 let injectCustomPrompt;
@@ -164,7 +174,7 @@ describe("amplification reaches gemini / antigravity / kiro", () => {
     expect(sys).toContain("RAKYAT JELATA");
     expect(sys).toContain("AUTHORITY PRECEDENCE");
     expect(sys).toContain("IDENTITY REINFORCED");
-    expect(body.contents[0].parts[0].text).toBe("[TASK-DIRECT] do the task");
+    expect(body.contents[body.contents.length - 1].parts[0].text).toBe("[TASK-DIRECT] do the task");
   });
 
   it("antigravity: same, under request", () => {
@@ -179,7 +189,7 @@ describe("amplification reaches gemini / antigravity / kiro", () => {
     const sys = body.request.systemInstruction.parts.map((p) => p.text || "").join("\n");
     expect(sys).toContain("RAKYAT JELATA");
     expect(sys).toContain("IDENTITY REINFORCED");
-    expect(body.request.contents[0].parts[0].text).toBe("[TASK-DIRECT] do the task");
+    expect(body.request.contents[body.request.contents.length - 1].parts[0].text).toBe("[TASK-DIRECT] do the task");
   });
 
   it("kiro: persona + marker + identity anchor on the live turn", () => {
@@ -330,5 +340,69 @@ describe("shipped persona prompts carry the per-family calibration", () => {
       files.map((f) => read(f).replace(/## KALIBRASI KELUARGA: [^\n]*\n\n[^\n]*\n/, ""))
     );
     expect(stripped.size).toBe(1);
+  });
+});
+
+// Prefill: the gateway shipped the persona project's worked example (prefill.json)
+// but never read it — the strongest compliance lever sat unused. It is now spliced
+// before the live turn, disabled by PERSONA_PREFILL=off, and skipped whenever the
+// request declares tools.
+describe("few-shot priming (prefill.json)", () => {
+  const dir = fileURLToPath(new URL("../../prompts", import.meta.url));
+
+  it("ships the priming file with complete user/assistant pairs only", () => {
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, "prefill.json"), "utf8"));
+    expect(Array.isArray(raw)).toBe(true);
+    expect(raw.length % 2).toBe(0);
+    expect(raw.length).toBeGreaterThanOrEqual(2);
+    raw.forEach((t, i) => {
+      expect(t.role).toBe(i % 2 === 0 ? "user" : "assistant");
+      expect(typeof t.content).toBe("string");
+    });
+    // the demonstrated behaviour is the marker contract
+    expect(raw.some((t) => t.role === "assistant" && t.content.includes("[RAKYAT]"))).toBe(true);
+  });
+
+  it("primes a chat request right before the live turn", () => {
+    const body = { messages: [{ role: ROLE.USER, content: "kerjakan" }] };
+    injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3", "glm-5.3-mod");
+    const roles = body.messages.map((m) => m.role);
+    expect(roles[roles.length - 1]).toBe(ROLE.USER);
+    expect(roles.filter((r) => r === ROLE.ASSISTANT).length).toBe(3);
+    // the anchor still lands between the worked example and the live turn
+    expect(body.messages[body.messages.length - 2].content).toContain("IDENTITY REINFORCED");
+    expect(body.messages[body.messages.length - 1].content).toBe("[TASK-DIRECT] kerjakan");
+  });
+
+  it("primes a gemini body without breaking user|model alternation", () => {
+    const body = { contents: [
+      { role: "model", parts: [{ text: "prev" }] },
+      { role: "user", parts: [{ text: "kerjakan" }] },
+    ] };
+    injectCustomPrompt(body, FORMATS.GEMINI, "glm-5.3", "glm-5.3-mod");
+    for (let i = 1; i < body.contents.length; i++) {
+      expect(body.contents[i].role).not.toBe(body.contents[i - 1].role);
+    }
+    expect(body.contents[body.contents.length - 1].role).toBe("user");
+  });
+
+  it("skips priming when the request declares tools", () => {
+    const body = { messages: [{ role: ROLE.USER, content: "x" }], tools: [{ type: "function", function: { name: "f" } }] };
+    injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3", "glm-5.3-mod");
+    expect(body.messages.filter((m) => m.role === ROLE.ASSISTANT).length).toBe(0);
+    expect(body.messages[body.messages.length - 1].role).toBe(ROLE.USER);
+  });
+
+  it("honours PERSONA_PREFILL=off", () => {
+    const prev = process.env.PERSONA_PREFILL;
+    process.env.PERSONA_PREFILL = "off";
+    try {
+      const body = { messages: [{ role: ROLE.USER, content: "x" }] };
+      injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3", "glm-5.3-mod");
+      expect(body.messages.filter((m) => m.role === ROLE.ASSISTANT).length).toBe(0);
+    } finally {
+      if (prev === undefined) delete process.env.PERSONA_PREFILL;
+      else process.env.PERSONA_PREFILL = prev;
+    }
   });
 });

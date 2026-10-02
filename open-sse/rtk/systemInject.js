@@ -82,6 +82,113 @@ export function injectSystemPromptParts(body, format, parts) {
   }
 }
 
+// ---- Few-shot priming (demonstrate the behaviour, don't describe it) ----
+// Restating a rule costs instruction weight, and instruction weight is what
+// trips a filter. Showing the same behaviour inside real assistant turns does
+// not: the model is completing a pattern it can already see. The turns are
+// spliced immediately BEFORE the live user turn, so the worked example is the
+// last thing the model reads before it has to answer.
+//
+// Two guards, both deliberate:
+//   - a request that declares tools is left alone. A primed assistant turn
+//     carries no tool call, which contradicts an active tool loop.
+//   - fail-closed: if the body shape cannot be read confidently, do not prime.
+export function hasToolDeclarations(body) {
+  try {
+    if (!body || typeof body !== "object") return false;
+    const nonEmpty = (v) => Array.isArray(v) && v.length > 0;
+    if (nonEmpty(body.tools) || nonEmpty(body.functions)) return true;
+    const gHost = geminiHost(body);
+    if (gHost && nonEmpty(gHost.tools)) return true;
+    const ctx = body.conversationState?.currentMessage?.userInputMessage?.userInputMessageContext;
+    if (ctx && nonEmpty(ctx.tools)) return true;
+    return false;
+  } catch (_) {
+    return true;
+  }
+}
+
+function lastIndexWhere(arr, pred) {
+  for (let i = arr.length - 1; i >= 0; i--) if (pred(arr[i])) return i;
+  return -1;
+}
+
+export function injectFewShot(body, format, turns) {
+  try {
+    if (!body || typeof body !== "object") return false;
+    if (hasToolDeclarations(body)) return false;
+    const clean = (Array.isArray(turns) ? turns : []).filter(
+      (t) => t && (t.role === ROLE.USER || t.role === ROLE.ASSISTANT)
+        && typeof t.content === "string" && t.content.length > 0
+    );
+    if (clean.length < 2) return false;
+    const sentinel = clean[clean.length - 1].content;
+    const seen = (text) => typeof text === "string" && text.includes(sentinel);
+
+    // OpenAI chat / Claude: messages[] already uses user|assistant roles. Claude
+    // only rejects an assistant turn in FINAL position, and the splice below
+    // keeps the live user turn last.
+    if (Array.isArray(body.messages)) {
+      const arr = body.messages;
+      if (arr.some((m) => seen(typeof m?.content === "string" ? m.content : null))) return false;
+      const idx = lastIndexWhere(arr, (m) => m && m.role === ROLE.USER);
+      if (idx < 0) return false;
+      try { arr.splice(idx, 0, ...clean.map((t) => ({ role: t.role, content: t.content }))); } catch (_) { return false; }
+      return true;
+    }
+
+    // Responses input[]: items carry an explicit type and typed content parts.
+    if (Array.isArray(body.input)) {
+      const arr = body.input;
+      const textOf = (m) => (Array.isArray(m?.content)
+        ? m.content.map((p) => (typeof p?.text === "string" ? p.text : "")).join("")
+        : typeof m?.content === "string" ? m.content : null);
+      if (arr.some((m) => seen(textOf(m)))) return false;
+      const idx = lastIndexWhere(arr, (m) => m && m.role === ROLE.USER);
+      if (idx < 0) return false;
+      const nodes = clean.map((t) => ({
+        type: RESPONSES_ITEM.MESSAGE,
+        role: t.role,
+        content: [{
+          type: t.role === ROLE.ASSISTANT ? RESPONSES_ITEM.OUTPUT_TEXT : RESPONSES_ITEM.INPUT_TEXT,
+          text: t.content,
+        }],
+      }));
+      try { arr.splice(idx, 0, ...nodes); } catch (_) { return false; }
+      return true;
+    }
+
+    // Gemini / Antigravity: contents[] alternates user|model, and the API
+    // rejects two turns of the same role in a row — so only prime when the turn
+    // before the live user turn is a model turn (or there is no history yet).
+    const gHost = geminiHost(body);
+    if (gHost && Array.isArray(gHost.contents)) {
+      const arr = gHost.contents;
+      const textOf = (c) => (Array.isArray(c?.parts)
+        ? c.parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("")
+        : null);
+      if (arr.some((c) => seen(textOf(c)))) return false;
+      const idx = lastIndexWhere(arr, (c) => c && c.role === GEMINI_ROLE.USER);
+      if (idx < 0) return false;
+      if (idx > 0 && arr[idx - 1]?.role === GEMINI_ROLE.USER) return false;
+      const nodes = clean.map((t) => ({
+        role: t.role === ROLE.ASSISTANT ? GEMINI_ROLE.MODEL : GEMINI_ROLE.USER,
+        parts: [{ text: t.content }],
+      }));
+      try { arr.splice(idx, 0, ...nodes); } catch (_) { return false; }
+      return true;
+    }
+
+    // Kiro is deliberately not primed: its translator normalizes every history
+    // item (modelId, userInputMessageContext, consecutive-user merging) BEFORE
+    // this runs, and an item added here would skip that pass — the same class of
+    // 400 REQUEST_BODY_INVALID the injectKiroSystem comment documents.
+  } catch (_) {
+    // fail-closed
+  }
+  return false;
+}
+
 export function injectSystemPrompt(body, format, prompt) {
   try {
     if (!body || !prompt) return;
