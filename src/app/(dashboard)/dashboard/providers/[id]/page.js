@@ -20,6 +20,7 @@ import CompatibleModelsSection from "./CompatibleModelsSection";
 import ConnectionRow from "./ConnectionRow";
 import AddApiKeyModal from "./AddApiKeyModal";
 import EditCompatibleNodeModal from "./EditCompatibleNodeModal";
+import BansosToolsModal from "./BansosToolsModal";
 import AddCustomModelModal from "./AddCustomModelModal";
 import BulkImportCodexModal from "./BulkImportCodexModal";
 import BulkImportGrokCliModal from "./BulkImportGrokCliModal";
@@ -56,6 +57,7 @@ export default function ProviderDetailPage() {
   // A bansos pool can hold thousands of keys; rendering every row freezes the
   // tab long before the server notices. Window the list and let the operator
   // search it.
+  const [showBansosTools, setShowBansosTools] = useState(false);
   const [connSearch, setConnSearch] = useState("");
   const [connLimit, setConnLimit] = useState(50);
   const [showBulkProxyModal, setShowBulkProxyModal] = useState(false);
@@ -1541,6 +1543,15 @@ export default function ProviderDetailPage() {
               <Button
                 size="sm"
                 variant="secondary"
+                icon="volunteer_activism"
+                onClick={() => setShowBansosTools(true)}
+                className="w-full sm:w-auto"
+              >
+                Bansos
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
                 icon="delete"
                 onClick={async () => {
                   setConfirmState({
@@ -1963,6 +1974,15 @@ export default function ProviderDetailPage() {
         onSave={handleUpdateConnection}
         onClose={() => setShowEditModal(false)}
       />
+      {isCompatible && providerNode && (
+        <BansosToolsModal
+          isOpen={showBansosTools}
+          node={providerNode}
+          connections={connections}
+          onRefresh={fetchConnections}
+          onClose={() => setShowBansosTools(false)}
+        />
+      )}
       {isCompatible && (
         <EditCompatibleNodeModal
           isOpen={showEditNodeModal}
