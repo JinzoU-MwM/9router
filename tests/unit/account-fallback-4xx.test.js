@@ -15,13 +15,25 @@ describe("checkFallbackError — request-scoped vs account-scoped failures", () 
       },
     }));
 
-    expect(result).toEqual({ shouldFallback: false, cooldownMs: 0 });
+    expect(result).toEqual({ shouldFallback: false, cooldownMs: 0, scope: "none" });
   });
 
   it("still falls back for account-scoped statuses", () => {
     for (const status of [401, 402, 403, 404, 429]) {
-      expect(checkFallbackError(status, "nope").shouldFallback).toBe(true);
+      const result = checkFallbackError(status, "nope");
+      expect(result.shouldFallback).toBe(true);
+      expect(["model", "account"]).toContain(result.scope);
     }
+  });
+
+  it("locks the whole credential for transport failures", () => {
+    for (const text of ["fetch failed", "ECONNRESET", "socket hang up"]) {
+      expect(checkFallbackError(0, text).scope).toBe("account");
+    }
+  });
+
+  it("keeps a final 401 account-scoped after token refresh", () => {
+    expect(checkFallbackError(401, "unauthorized").scope).toBe("account");
   });
 
   it("still honours rate-limit / quota wording on any 4xx", () => {
