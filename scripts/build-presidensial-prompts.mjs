@@ -226,12 +226,24 @@ const GATEWAY_PAYLOAD = sanitize(
   mustRead(path.join(PRES_DIR, "core/persona/REPLACE/GATEWAY.presidensial.md"),
     "core/persona/REPLACE/GATEWAY.presidensial.md"));
 
-// ── Model → file map (mirrors CUSTOM_PROMPTS in open-sse/rtk/customPrompt.js) ─
-const MOD_FILES = [
-  "glm-5.3-mod", "glm-5.2-mod", "kimi-k3-mod", "deepseek-v4-mod",
-  "glm-5.3-flash-mod", "gpt-5.6-luna-mod", "gpt-5.6-terra-mod",
-  "gpt-5.6-sol-mod", "gemini-3.8-flash-mod", "opus-4.8-mod", "opus-5-mod",
-];
+// ── Model → file map (single source of truth: the loader's own map) ─────────
+// This used to be a hand-kept copy of CUSTOM_PROMPTS, and the copies drifted:
+// the generator wrote opus-4.8-mod/opus-5-mod while the loader had no keys for
+// them, so two prompts shipped and were never injected. Deriving the list here
+// makes that class of mismatch impossible.
+const loader = await import("../open-sse/rtk/customPrompt.js");
+const MOD_FILES = Object.keys(loader.CUSTOM_PROMPTS);
+for (const id of MOD_FILES) {
+  const file = loader.CUSTOM_PROMPTS[id];
+  if (file !== `${id}.md`) {
+    console.error(`[presidensial-prompts] loader maps "${id}" to "${file}", expected "${id}.md"`);
+    process.exit(1);
+  }
+}
+if (MOD_FILES.length === 0) {
+  console.error("[presidensial-prompts] the loader exposes no mapped models");
+  process.exit(1);
+}
 
 function buildMod(modelId) {
   const family = familyFor(modelId);

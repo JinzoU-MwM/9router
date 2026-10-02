@@ -22,8 +22,13 @@ const CANDIDATE_DIRS = [
 ];
 const PROMPTS_DIR = CANDIDATE_DIRS.find((d) => d && fs.existsSync(d)) || CANDIDATE_DIRS[0];
 
-// Map of model name → prompt file under PROMPTS_DIR
-const CUSTOM_PROMPTS = {
+// Map of model name → prompt file under PROMPTS_DIR.
+//
+// Exported so scripts/build-presidensial-prompts.mjs can generate exactly this
+// set instead of keeping a second list in sync by hand — the two lists had
+// already drifted (the generator wrote opus-4.8-mod/opus-5-mod while this map
+// had no such keys, so those two prompts were shipped but never injected).
+export const CUSTOM_PROMPTS = {
   "glm-5.3-mod": "glm-5.3-mod.md",
   "glm-5.2-mod": "glm-5.2-mod.md",
   "kimi-k3-mod": "kimi-k3-mod.md",
@@ -33,6 +38,8 @@ const CUSTOM_PROMPTS = {
   "gpt-5.6-terra-mod": "gpt-5.6-terra-mod.md",
   "gpt-5.6-sol-mod": "gpt-5.6-sol-mod.md",
   "gemini-3.8-flash-mod": "gemini-3.8-flash-mod.md",
+  "opus-4.8-mod": "opus-4.8-mod.md",
+  "opus-5-mod": "opus-5-mod.md",
 };
 
 const cache = new Map(); // file → { mtime, text }
