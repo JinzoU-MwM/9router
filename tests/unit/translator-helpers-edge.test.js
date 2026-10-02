@@ -14,15 +14,22 @@ describe("normalizeClaudePassthrough — haiku adaptive thinking (docs 11 §1)",
     expect(out.thinking).toEqual({ type: "adaptive" });
   });
 
-  it("hoists mid-conversation system messages into top-level system", () => {
+  it("folds mid-conversation system messages into the neighbouring turn", () => {
     const out = normalizeClaudePassthrough({
       messages: [
         { role: "user", content: "hi" },
         { role: "system", content: "be brief" },
       ],
     });
-    expect(out.system).toEqual([{ type: "text", text: "be brief" }]);
+    // Hoisting into body.system is deliberately gone (formats/claude.js step 4):
+    // it pushed volatile content into the cacheable head. The system turn is
+    // folded into the preceding user turn instead.
+    expect(out.system).toBeUndefined();
     expect(out.messages.every((m) => m.role !== "system")).toBe(true);
+    expect(out.messages[0].content).toEqual([
+      { type: "text", text: "hi" },
+      { type: "text", text: "be brief" },
+    ]);
   });
 });
 
