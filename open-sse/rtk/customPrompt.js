@@ -157,6 +157,48 @@ const OWN_TEXT_MARKS = [
   "You are a lazy senior developer",
 ];
 
+// ── Tuning levers ───────────────────────────────────────────────────────────
+// All default ON: with no env set, injection is byte-identical to before.
+// They exist so the persona can be trimmed by measurement instead of by
+// guesswork — a live upstream test showed the full persona *causing* refusal on
+// an explicit-malware request (3/3 refused with it, the same prompt answered
+// with full code without it), so being able to drop one piece at a time is the
+// difference between tuning and guessing.
+//   PERSONA_OMIT_SECTIONS="ZERO REFUSAL|TANPA DISCLAIMER, TANPA MORAL"
+//                           drop whole sections ('|' separator — heading names
+//                           contain commas)
+//   PERSONA_TAIL=off        skip the recency identity anchor
+//   PERSONA_PRECEDENCE=off  skip the precedence anchor (client-persona conflict)
+//   PERSONA_TASK_DIRECT=off skip the [TASK-DIRECT] prefix on the live turn
+function flagOn(name, dflt = true) {
+  const v = process.env[name];
+  if (v === undefined || v === "") return dflt;
+  return !["off", "0", "false", "no"].includes(String(v).toLowerCase());
+}
+
+// Drop `## HEADING` sections by name (case-insensitive, exact title match):
+// from the matching heading up to the next heading of the same or higher level.
+function omitSections(prompt, names) {
+  if (!names.length) return prompt;
+  const wanted = names.map((n) => n.trim().toUpperCase()).filter(Boolean);
+  if (!wanted.length) return prompt;
+  const out = [];
+  let skippingAt = 0;
+  for (const line of prompt.split("\n")) {
+    const h = line.match(/^(#{1,3})\s+(.+?)\s*$/);
+    if (h) {
+      const level = h[1].length;
+      if (skippingAt && level <= skippingAt) skippingAt = 0;
+      if (!skippingAt && wanted.includes(h[2].trim().toUpperCase())) {
+        skippingAt = level;
+        continue;
+      }
+    }
+    if (!skippingAt) out.push(line);
+  }
+  return out.join("\n");
+}
+
 function withChainAnchor(parts, anchor) {
   if (parts.length <= 1) return parts;
   return parts.map((p, i) => (i === 0 ? p : `${anchor}\n\n${p}`));
@@ -184,8 +226,10 @@ export function injectCustomPrompt(body, format, model, requestModel) {
   // the client-requested model name first, then the resolved model name.
   const file = CUSTOM_PROMPTS[requestModel] || CUSTOM_PROMPTS[model];
   if (!file) return;
-  const prompt = loadPrompt(file);
-  if (!prompt) return;
+  const rawPrompt = loadPrompt(file);
+  if (!rawPrompt) return;
+  const omitted = (process.env.PERSONA_OMIT_SECTIONS || "").split("|").map((x) => x.trim()).filter(Boolean);
+  const prompt = omitSections(rawPrompt, omitted);
 
   // Client persona length BEFORE we inject anything — used for precedence.
   // Our own injected text (identity header, persona body, anchors) is excluded
@@ -224,7 +268,9 @@ export function injectCustomPrompt(body, format, model, requestModel) {
   // Anti-greeting-race: prefix the live user turn so the model starts on the
   // task instead of opening with a canned persona greeting. Idempotent — the
   // persona body explains the marker (see TASK-DIRECT in the builder).
-  injectUserPrefix(body, format, TASK_DIRECT_MARKER);
+  if (flagOn("PERSONA_TASK_DIRECT")) {
+    injectUserPrefix(body, format, TASK_DIRECT_MARKER);
+  }
 
   // Few-shot priming: a worked example (user asks → assistant answers with the
   // marker) spliced immediately before the live turn. Injected before the two
@@ -238,12 +284,14 @@ export function injectCustomPrompt(body, format, model, requestModel) {
 
   // Amplification 1: precedence. When the client shipped its own persona, assert
   // that this gateway persona outranks it, so a conflict has a defined winner.
-  if (clientPersonaChars > CLIENT_PERSONA_MIN) {
+  if (clientPersonaChars > CLIENT_PERSONA_MIN && flagOn("PERSONA_PRECEDENCE")) {
     reinforcePersona(body, format, precedenceAnchor(PERSONA.callsign));
   }
 
   // Amplification 2: recency reinforcement. Re-state the identity anchor right
   // before the live user turn — the strongest attention position — so the
   // persona survives long-context decay.
-  reinforcePersona(body, format, PERSONA.tail);
+  if (flagOn("PERSONA_TAIL")) {
+    reinforcePersona(body, format, PERSONA.tail);
+  }
 }
