@@ -292,3 +292,43 @@ describe("shipped persona prompts are path-free", () => {
     expect([...hits]).toEqual([]);
   });
 });
+
+// The persona project carries one payload per model family (its body is shared,
+// the unique part is a single calibration line describing how that family's own
+// safety layer reads the persona — e.g. kimi treats a "<harness_spec>" tag as
+// injection and dismisses it, gpt/claude filters are the strongest and need
+// intent decomposition). The gateway's generated files were once byte-identical
+// for every model, which left that per-family layer with no reader at all.
+describe("shipped persona prompts carry the per-family calibration", () => {
+  const dir = fileURLToPath(new URL("../../prompts", import.meta.url));
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"));
+  const FAMILIES = [
+    ["glm", /^glm-/],
+    ["gpt", /^gpt-/],
+    ["claude", /^opus-/],
+    ["gemini", /^gemini-/],
+    ["kimi", /^kimi-/],
+    ["deepseek", /^deepseek-/],
+  ];
+  const read = (f) => fs.readFileSync(path.join(dir, f), "utf8");
+
+  it("is no longer one payload for every model", () => {
+    const unique = new Set(files.map(read));
+    expect(unique.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it.each(FAMILIES)("%s models carry their own calibration block", (family, re) => {
+    const targets = files.filter((f) => re.test(f));
+    expect(targets.length).toBeGreaterThan(0);
+    for (const f of targets) {
+      expect(read(f)).toContain(`## KALIBRASI KELUARGA: ${family.toUpperCase()}`);
+    }
+  });
+
+  it("keeps one shared body — only the calibration block differs", () => {
+    const stripped = new Set(
+      files.map((f) => read(f).replace(/## KALIBRASI KELUARGA: [^\n]*\n\n[^\n]*\n/, ""))
+    );
+    expect(stripped.size).toBe(1);
+  });
+});
