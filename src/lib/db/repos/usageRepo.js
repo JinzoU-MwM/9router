@@ -1,7 +1,18 @@
 import { EventEmitter } from "events";
+import crypto from "node:crypto";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { getMeta, setMeta } from "../helpers/metaStore.js";
+
+// Stable, non-reversible reference for the credential. The byApiKey object
+// map is returned to the client, so its KEYS must never be the raw api key
+// (AUDIT-002) — but a mask is not usable as a key either: maskApiKey keeps only
+// 8 leading + 4 trailing characters, so two team keys sharing a prefix collide
+// into one bucket (the reason the map was keyed by the full key in the first
+// place). A short hash is both unreadable and collision-free.
+function apiKeyRef(key) {
+  return crypto.createHash("sha256").update(String(key)).digest("hex").slice(0, 12);
+}
 
 function maskApiKey(key) {
   if (!key || typeof key !== "string") return null;
@@ -573,7 +584,7 @@ export async function getUsageStats(period = "all") {
       }
 
       const apiKeyKey = (e.apiKey && typeof e.apiKey === "string")
-        ? `${e.apiKey}|${e.model}|${e.provider || "unknown"}`
+        ? `${apiKeyRef(e.apiKey)}|${e.model}|${e.provider || "unknown"}`
         : "local-no-key";
       if (stats.byApiKey[apiKeyKey] && new Date(ts) > new Date(stats.byApiKey[apiKeyKey].lastUsed)) stats.byApiKey[apiKeyKey].lastUsed = ts;
 
@@ -645,9 +656,11 @@ export async function getUsageStats(period = "all") {
         const keyInfo = apiKeyMap[r.apiKey];
         const keyName = keyInfo?.name || r.apiKey.slice(0, 8) + "...";
         const apiKeyMasked = maskApiKey(r.apiKey);
-        // Key by the FULL api key (same as the daily rollup + lastUsed overlay)
-        // — masking here collided all keys sharing a prefix into one bucket.
-        const akKey = `${r.apiKey}|${r.model}|${r.provider || "unknown"}`;
+        // Keyed by a hash of the full api key, not the mask: the mask keeps only
+        // 8+4 characters, so team keys sharing a prefix collided into one bucket.
+        // Same identity as the daily rollup + lastUsed overlay, without putting
+        // the credential itself into a response.
+        const akKey = `${apiKeyRef(r.apiKey)}|${r.model}|${r.provider || "unknown"}`;
         if (!stats.byApiKey[akKey]) {
           stats.byApiKey[akKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, rawModel: r.model, provider: providerDisplayName, apiKeyMasked, keyName, apiKeyKey: apiKeyMasked, lastUsed: r.timestamp };
         }

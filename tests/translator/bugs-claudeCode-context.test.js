@@ -56,7 +56,9 @@ describe("Claude Code CLI context → OpenAI", () => {
 
   // claude-to-openai.js:155-173 — tool_result image block stringified into raw JSON
   // KNOWN BUG
-  it.fails("tool_result image block is preserved", () => {
+  // now passes: the bridge stopped dropping tool_result images, so the guard
+  // flipped from it.fails to it (same flip documented in bugs-openai-bridge).
+  it("tool_result image block is preserved", () => {
     const out = T(FORMATS.CLAUDE, FORMATS.OPENAI, {
       messages: [
         { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "screenshot", input: {} }] },

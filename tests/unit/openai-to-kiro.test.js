@@ -11,7 +11,17 @@ import { openaiToKiroRequest } from "../../open-sse/translator/request/openai-to
 
 const contentOf = (result) =>
   result.conversationState.currentMessage.userInputMessage.content;
-const systemPromptOf = (result) => result.systemPrompt || "";
+// kiro.dev rejects a body carrying a top-level systemPrompt (400
+// REQUEST_BODY_INVALID, commit 1892ed77) — the prompt now travels inside the
+// first user turn, so assert against what is actually sent upstream and keep
+// the old field only as a fallback should the wire shape ever regain it.
+const sentTextOf = (result) =>
+  result.systemPrompt
+  || result.contentPrefix
+  || result.conversationState?.currentMessage?.userInputMessage?.content
+  || "";
+
+const systemPromptOf = sentTextOf;
 
 describe("openaiToKiroRequest", () => {
   describe("basic message conversion", () => {
@@ -568,7 +578,7 @@ describe("openaiToKiroRequest", () => {
       expect(systemPromptOf(result)).toContain("<max_thinking_length>16000</max_thinking_length>");
     });
 
-    it("keeps top-level systemPrompt stable across turns", () => {
+    it("keeps the injected prompt stable across turns", () => {
       const first = openaiToKiroRequest(
         "claude-sonnet-4.6-thinking",
         { messages: [{ role: "user", content: "first" }] },
@@ -582,8 +592,9 @@ describe("openaiToKiroRequest", () => {
         {}
       );
 
-      expect(first.systemPrompt).toBe(second.systemPrompt);
-      expect(first.systemPrompt).not.toContain("Current time");
+      const stablePromptOf = (r) => String(r.contentPrefix || "").split("[Context: Current time is")[0].trim();
+      expect(stablePromptOf(first)).toBe(stablePromptOf(second));
+      expect(stablePromptOf(first)).not.toContain("Current time");
       expect(first.conversationState.currentMessage.userInputMessage.content).toContain("Current time");
     });
 
