@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
-import { Button, Badge, Input, Modal, Select } from "@/shared/components";
+import { Button, Badge, Input, Modal, Select, Toggle } from "@/shared/components";
 
 export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose, isAnthropic }) {
   const [formData, setFormData] = useState({
@@ -16,6 +16,9 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
   const [checkModelId, setCheckModelId] = useState("");
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
+  const [autoPurge, setAutoPurge] = useState(false);
+  const [savingPurge, setSavingPurge] = useState(false);
+  const [purgeError, setPurgeError] = useState(null);
 
   useEffect(() => {
     if (node) {
@@ -25,6 +28,8 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
         apiType: node.apiType || "chat",
         baseUrl: node.baseUrl || (isAnthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"),
       });
+      setAutoPurge(node.autoPurge === true);
+      setPurgeError(null);
     }
   }, [node, isAnthropic]);
 
@@ -70,6 +75,26 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
       setValidationResult("failed");
     } finally {
       setValidating(false);
+    }
+  };
+
+  const handleAutoPurgeToggle = async (next) => {
+    if (!node?.id || savingPurge) return;
+    setSavingPurge(true);
+    setPurgeError(null);
+    try {
+      const res = await fetch(`/api/provider-nodes/${node.id}/auto-purge`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoPurge: next }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setAutoPurge(data.autoPurge === true);
+    } catch (error) {
+      setPurgeError(error.message || "Failed to save");
+    } finally {
+      setSavingPurge(false);
     }
   };
 
@@ -133,6 +158,16 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
             {validationResult === "success" ? "Valid" : "Invalid"}
           </Badge>
         )}
+        <div className="flex flex-col gap-2 border-t pt-3">
+          <Toggle
+            checked={autoPurge}
+            onChange={handleAutoPurgeToggle}
+            disabled={savingPurge}
+            label="Auto-delete exhausted keys"
+            description="Bansos pools. Removes a key from this node permanently when the endpoint reports it invalid or out of quota. Never fires on rate limits, timeouts or 5xx. Off (default) = stock behaviour, keys only get a short cooldown."
+          />
+          {purgeError && <Badge variant="error">{purgeError}</Badge>}
+        </div>
         <div className="flex gap-2">
           <Button onClick={handleSubmit} fullWidth disabled={!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim() || saving}>
             {saving ? "Saving..." : "Save"}
