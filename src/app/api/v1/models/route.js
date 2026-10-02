@@ -147,6 +147,74 @@ const parseOpenAIStyleModels = (data) => {
   return data?.data || data?.models || data?.results || [];
 };
 
+const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
+const MODEL_CATALOG_FAILURE_CACHE_TTL_MS = 10_000;
+const MODEL_CATALOG_FETCH_TIMEOUT_MS = 4_000;
+const modelCatalogCache = new Map();
+
+function modelCatalogCacheKey(connection, catalogType) {
+  return [
+    catalogType,
+    connection?.id || connection?.provider || "unknown",
+    connection?.updatedAt || "",
+    connection?.provider,
+  ].join(":");
+}
+
+function pruneModelCatalogCache() {
+  const now = Date.now();
+  for (const [key, entry] of modelCatalogCache) {
+    if (!entry.promise && entry.expiresAt <= now) modelCatalogCache.delete(key);
+  }
+  while (modelCatalogCache.size > 512) {
+    const oldestKey = modelCatalogCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    modelCatalogCache.delete(oldestKey);
+  }
+}
+
+async function getCachedModelCatalog(connection, catalogType, loader) {
+  const key = modelCatalogCacheKey(connection, catalogType);
+  const now = Date.now();
+  const cached = modelCatalogCache.get(key);
+  if (cached?.promise) return cached.promise;
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  let timeoutId;
+  const promise = Promise.race([
+    Promise.resolve().then(loader),
+    new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve(null), MODEL_CATALOG_FETCH_TIMEOUT_MS);
+      timeoutId.unref?.();
+    }),
+  ])
+    .then((result) => {
+      const models = Array.isArray(result?.models)
+        ? result.models.filter((model) => typeof model?.id === "string" && model.id.trim())
+        : [];
+      const value = models.length ? { ...result, models } : null;
+      modelCatalogCache.set(key, {
+        value,
+        expiresAt: Date.now() + (value ? MODEL_CATALOG_CACHE_TTL_MS : MODEL_CATALOG_FAILURE_CACHE_TTL_MS),
+      });
+      pruneModelCatalogCache();
+      return value;
+    })
+    .catch(() => {
+      modelCatalogCache.set(key, {
+        value: null,
+        expiresAt: Date.now() + MODEL_CATALOG_FAILURE_CACHE_TTL_MS,
+      });
+      pruneModelCatalogCache();
+      return null;
+    })
+    .finally(() => clearTimeout(timeoutId));
+
+  modelCatalogCache.set(key, { promise, expiresAt: Infinity });
+  pruneModelCatalogCache();
+  return promise;
+}
+
 // Header sent by fetchCompatibleModelIds to detect cross-instance /models fetches
 // and break recursive loops between 9router instances connected to each other.
 export const INTERNAL_MODELS_FETCH_HEADER = "x-9r-internal-models-fetch";
@@ -308,6 +376,42 @@ export async function buildModelsList(kindFilter, options = {}) {
     }
   }
 
+  // Resolve dynamic provider catalogs concurrently and cache them briefly.
+  // The previous in-loop awaits made /v1/models wait for every provider in
+  // sequence, so one slow/dead account could stall clients for many seconds.
+  const dynamicCatalogs = new Map();
+  await Promise.all(Array.from(activeConnectionByProvider.entries()).map(async ([providerId, conn]) => {
+    if (!providerMatchesKinds(providerId, kindFilter)) return;
+
+    const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+    const providerModels = PROVIDER_MODELS[staticAlias] || [];
+    const enabledModels = conn?.providerSpecificData?.enabledModels;
+    const hasExplicitEnabledModels = Array.isArray(enabledModels) && enabledModels.length > 0;
+    const isCompatibleProvider =
+      isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+    const catalog = {};
+    const tasks = [];
+
+    if (isCompatibleProvider && providerModels.length === 0 && !hasExplicitEnabledModels && !skipDynamicFetch) {
+      tasks.push(getCachedModelCatalog(conn, "compatible", async () => {
+        const ids = await fetchCompatibleModelIds(conn);
+        return { models: ids.map((id) => ({ id })) };
+      }).then((result) => {
+        catalog.compatibleModelIds = result?.models?.map((model) => model.id) || [];
+      }));
+    }
+
+    const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
+    if (liveResolver && !hasExplicitEnabledModels) {
+      tasks.push(getCachedModelCatalog(conn, "live", () => liveResolver(conn)).then((result) => {
+        catalog.live = result;
+      }));
+    }
+
+    await Promise.all(tasks);
+    dynamicCatalogs.set(providerId, catalog);
+  }));
+
   const models = [];
 
   // Lookup map so aggregateComboCapabilities can recursively resolve nested combos
@@ -401,7 +505,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         : providerModels.map((model) => model.id);
 
       if (isCompatibleProvider && rawModelIds.length === 0 && !skipDynamicFetch) {
-        rawModelIds = await fetchCompatibleModelIds(conn);
+        rawModelIds = dynamicCatalogs.get(providerId)?.compatibleModelIds || [];
       }
 
       // Config-driven live catalog override (e.g. Kiro returns dynamic
@@ -409,23 +513,19 @@ export async function buildModelsList(kindFilter, options = {}) {
       // whatever rawModelIds already holds.
       const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
       if (liveResolver && !hasExplicitEnabledModels) {
-        try {
-          const live = await liveResolver(conn);
-          if (live?.models?.length) {
-            rawModelIds = live.models.map((m) => m.id);
-            liveModelKindById = new Map(
-              live.models
-                .filter((m) => m?.id)
-                .map((m) => [m.id, modelKind(m)])
-            );
-            liveCapabilitiesById = new Map(
-              live.models
-                .filter((m) => m?.id && m.capabilities)
-                .map((m) => [m.id, m.capabilities])
-            );
-          }
-        } catch (err) {
-          console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
+        const live = dynamicCatalogs.get(providerId)?.live;
+        if (live?.models?.length) {
+          rawModelIds = live.models.map((m) => m.id);
+          liveModelKindById = new Map(
+            live.models
+              .filter((m) => m?.id)
+              .map((m) => [m.id, modelKind(m)])
+          );
+          liveCapabilitiesById = new Map(
+            live.models
+              .filter((m) => m?.id && m.capabilities)
+              .map((m) => [m.id, m.capabilities])
+          );
         }
       }
 

@@ -251,9 +251,10 @@ export default function ProvidersPage() {
       const data = await res.json();
       setTestResults(data);
       if (data.summary) {
-        const { passed, failed, total } = data.summary;
-        if (failed === 0) notify.success(`All ${total} tests passed`);
-        else notify.warning(`${passed}/${total} passed, ${failed} failed`);
+        const { passed, failed, total, unsupported = 0 } = data.summary;
+        if (failed === 0 && unsupported === 0) notify.success(`All ${total} tests passed`);
+        else if (failed === 0) notify.warning(`${passed} passed, ${unsupported} could not be tested`);
+        else notify.warning(`${passed} passed, ${failed} failed${unsupported ? `, ${unsupported} unsupported` : ""}`);
       }
     } catch (error) {
       setTestResults({ error: "Test request failed" });
@@ -978,8 +979,13 @@ function ProviderTestResultsView({ results }) {
               {summary.failed} failed
             </span>
           )}
+          {summary.unsupported > 0 && (
+            <span className="px-2 py-0.5 rounded bg-black/5 text-text-muted dark:bg-white/10 font-medium">
+              {summary.unsupported} unsupported
+            </span>
+          )}
           <span className="text-text-muted sm:ml-auto">
-            {summary.total} tested
+            {summary.total} selected
           </span>
         </div>
       )}
@@ -989,9 +995,9 @@ function ProviderTestResultsView({ results }) {
           className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-black/[0.03] px-3 py-2 text-xs dark:bg-white/[0.03] sm:flex-nowrap"
         >
           <span
-            className={`material-symbols-outlined text-[16px] ${r.valid ? "text-emerald-500" : "text-red-500"}`}
+            className={`material-symbols-outlined text-[16px] ${r.valid ? "text-emerald-500" : r.testable === false ? "text-text-muted" : "text-red-500"}`}
           >
-            {r.valid ? "check_circle" : "error"}
+            {r.valid ? "check_circle" : r.testable === false ? "help" : "error"}
           </span>
           <div className="min-w-0 flex-[1_1_160px]">
             <span className="block truncate font-medium sm:inline">
@@ -1010,10 +1016,12 @@ function ProviderTestResultsView({ results }) {
             className={`shrink-0 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${
               r.valid
                 ? "bg-emerald-500/15 text-emerald-400"
-                : "bg-red-500/15 text-red-400"
+                : r.testable === false
+                  ? "bg-black/5 text-text-muted dark:bg-white/10"
+                  : "bg-red-500/15 text-red-400"
             }`}
           >
-            {r.valid ? "OK" : r.diagnosis?.type || "ERROR"}
+            {r.valid ? "OK" : r.testable === false ? "UNTESTABLE" : r.diagnosis?.type || "ERROR"}
           </span>
         </div>
       ))}
@@ -1034,6 +1042,7 @@ ProviderTestResultsView.propTypes = {
       total: PropTypes.number,
       passed: PropTypes.number,
       failed: PropTypes.number,
+      unsupported: PropTypes.number,
     }),
     error: PropTypes.string,
   }).isRequired,

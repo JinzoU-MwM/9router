@@ -328,7 +328,7 @@ function isTokenExpired(connection) {
 
 async function testOAuthConnection(connection, effectiveProxy = null) {
   const config = OAUTH_TEST_CONFIG[connection.provider];
-  if (!config) return { valid: false, error: "Provider test not supported", refreshed: false };
+  if (!config) return { valid: false, testable: false, error: "Provider test not supported", refreshed: false };
   if (!connection.accessToken) return { valid: false, error: "No access token", refreshed: false };
 
   // Cursor uses protobuf API - can only verify token exists, not test endpoint
@@ -844,7 +844,7 @@ case "llm7": {
         return { valid: res.ok, error: res.ok ? null : "Invalid API key", refreshed: false };
       }
       default:
-        return { valid: false, error: "Provider test not supported" };
+        return { valid: false, testable: false, error: "Provider test not supported" };
     }
   } catch (err) {
     return { valid: false, error: err.message };
@@ -884,6 +884,26 @@ export async function testSingleConnection(id) {
 
   const latencyMs = Date.now() - start;
 
+  // A missing provider probe means we learned nothing about the credential.
+  // Keep routing state untouched; only clean up the legacy false-error written
+  // by older versions for this exact unsupported-test result.
+  if (result.testable === false) {
+    if (connection.testStatus === "error" && /provider test not supported/i.test(connection.lastError || "")) {
+      await updateProviderConnection(id, {
+        testStatus: "unknown",
+        lastError: null,
+        lastErrorAt: null,
+      });
+    }
+    return {
+      valid: false,
+      testable: false,
+      error: result.error || "Provider test not supported",
+      latencyMs,
+      testedAt: new Date().toISOString(),
+    };
+  }
+
   // Soft success (e.g. Grok CLI 402 spending-limit): credentials are good, account is
   // out of credits. Keep testStatus active; surface the message as lastError so the
   // dashboard can show a warning without marking the connection broken.
@@ -919,5 +939,5 @@ export async function testSingleConnection(id) {
 
   await updateProviderConnection(id, updateData);
 
-  return { valid: result.valid, error: result.error, refreshed: !!result.refreshed, latencyMs, testedAt: new Date().toISOString() };
+  return { valid: result.valid, testable: true, error: result.error, refreshed: !!result.refreshed, latencyMs, testedAt: new Date().toISOString() };
 }

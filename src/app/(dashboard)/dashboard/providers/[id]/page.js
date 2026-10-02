@@ -700,10 +700,11 @@ export default function ProviderDetailPage() {
     setOneByOneStopping(false);
     setOneByOneCurrentConnectionId(null);
     setOneByOneResults(queuedState);
-    setOneByOneSummary({ total: connections.length, completed: 0, passed: 0, failed: 0, stopped: false });
+    setOneByOneSummary({ total: connections.length, completed: 0, passed: 0, failed: 0, unsupported: 0, stopped: false });
 
     let passed = 0;
     let failed = 0;
+    let unsupported = 0;
 
     try {
       for (let index = 0; index < connections.length; index += 1) {
@@ -713,6 +714,7 @@ export default function ProviderDetailPage() {
             completed: index,
             passed,
             failed,
+            unsupported,
             stopped: true,
           });
           break;
@@ -729,17 +731,20 @@ export default function ProviderDetailPage() {
           const res = await fetch(`/api/providers/${connection.id}/test`, { method: "POST" });
           const data = await res.json();
           const valid = !!data.valid;
+          const testable = data.testable !== false;
 
           if (valid) {
             passed += 1;
-          } else {
+          } else if (testable) {
             failed += 1;
+          } else {
+            unsupported += 1;
           }
 
           setOneByOneResults((prev) => ({
             ...prev,
             [connection.id]: {
-              state: valid ? "success" : "failed",
+              state: valid ? "success" : testable ? "failed" : "unsupported",
               error: valid ? null : (data.error || null),
             },
           }));
@@ -759,6 +764,7 @@ export default function ProviderDetailPage() {
           completed: index + 1,
           passed,
           failed,
+          unsupported,
           stopped: false,
         });
 
@@ -1645,6 +1651,9 @@ export default function ProviderDetailPage() {
                     <span>Completed: {oneByOneSummary.completed}</span>
                     <span>Passed: {oneByOneSummary.passed}</span>
                     <span>Failed: {oneByOneSummary.failed}</span>
+                    {oneByOneSummary.unsupported > 0 && (
+                      <span>Unsupported: {oneByOneSummary.unsupported}</span>
+                    )}
                     {oneByOneSummary.stopped && (
                       <span className="text-amber-600 dark:text-amber-400">Stopped</span>
                     )}

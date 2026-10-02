@@ -76,7 +76,7 @@ export async function POST(request) {
         mode,
         providerId: providerId || null,
         results: [],
-        summary: { total: 0, passed: 0, failed: 0 },
+        summary: { total: 0, passed: 0, failed: 0, unsupported: 0 },
         testedAt: new Date().toISOString(),
       });
     }
@@ -91,6 +91,7 @@ export async function POST(request) {
           connectionName: conn.name || conn.email || conn.provider,
           authType: conn.authType || getAuthGroup(conn.provider, conn),
           valid: data.valid,
+          testable: data.testable !== false,
           latencyMs: data.latencyMs || 0,
           error: data.error || null,
           diagnosis: data.diagnosis || null,
@@ -104,6 +105,7 @@ export async function POST(request) {
           connectionName: conn.name || conn.email || conn.provider,
           authType: conn.authType || getAuthGroup(conn.provider, conn),
           valid: false,
+          testable: true,
           latencyMs: 0,
           error: error.message,
           diagnosis: { type: "network_error", source: "local", code: null, message: error.message },
@@ -121,7 +123,8 @@ export async function POST(request) {
       summary: {
         total: results.length,
         passed: results.filter((r) => r.valid).length,
-        failed: results.filter((r) => !r.valid).length,
+        failed: results.filter((r) => r.testable !== false && !r.valid).length,
+        unsupported: results.filter((r) => r.testable === false).length,
       },
     });
   } catch (error) {

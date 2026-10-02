@@ -68,13 +68,22 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
     const sanitizedTitle = (titleMatch?.[1] || '').replace(/<[^>]*>/g, '').replace(/[\r\n]+/g, ' ').trim().slice(0, 160);
     const shortMsg = sanitizedTitle
       || (bodyText.length < 200 ? bodyText.replace(/<[^>]*>/g, '').trim().slice(0, 160) : `Upstream returned non-SSE response (${upstreamContentType})`);
-    const status = providerResponse.status || 502;
-    if (log?.errorLine) log.errorLine(reqTag, "✗", `BLOCKED ${status} · ${provider}/${model} · non-SSE (${upstreamContentType})\n    ${shortMsg}`);
+    const upstreamStatus = providerResponse.status || HTTP_STATUS.BAD_GATEWAY;
+    // A successful HTTP status with an HTML/text body is still a failed
+    // streaming request. Return 502 so the caller's account fallback records a
+    // real transient error instead of treating it as an upstream 200.
+    const status = upstreamStatus >= 200 && upstreamStatus < 300
+      ? HTTP_STATUS.BAD_GATEWAY
+      : upstreamStatus;
+    const message = `Upstream returned non-SSE response (${upstreamContentType})${shortMsg ? `: ${shortMsg}` : ""}`;
+    if (log?.errorLine) log.errorLine(reqTag, "✗", `BLOCKED ${status} · upstream ${upstreamStatus} · ${provider}/${model} · non-SSE (${upstreamContentType})\n    ${shortMsg}`);
     else console.warn(`[STREAM] ${provider} | ${model} | blocked pipe: ${shortMsg} [${status}]`);
-    streamController?.handleError?.(new Error(`upstream non-SSE: ${status}`));
+    streamController?.handleError?.(new Error(`upstream non-SSE: ${upstreamStatus} (${upstreamContentType})`));
     return {
       success: false,
-      response: new Response(JSON.stringify({ error: { message: `[${status}]: ${shortMsg}` } }), {
+      status,
+      error: message,
+      response: new Response(JSON.stringify({ error: { message: `[${status}]: ${message}` } }), {
         status,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
       }),

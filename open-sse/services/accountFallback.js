@@ -30,18 +30,18 @@ export function checkFallbackError(status, errorText, backoffLevel = 0) {
     if (rule.text && lowerError && lowerError.includes(rule.text)) {
       if (rule.backoff) {
         const newLevel = Math.min(backoffLevel + 1, BACKOFF_CONFIG.maxLevel);
-        return { shouldFallback: true, cooldownMs: getQuotaCooldown(newLevel), newBackoffLevel: newLevel };
+        return { shouldFallback: true, cooldownMs: getQuotaCooldown(newLevel), newBackoffLevel: newLevel, scope: rule.scope || "model" };
       }
-      return { shouldFallback: true, cooldownMs: rule.cooldownMs };
+      return { shouldFallback: true, cooldownMs: rule.cooldownMs, scope: rule.scope || "model" };
     }
 
     // Status-based rule: match HTTP status code
     if (rule.status && rule.status === status) {
       if (rule.backoff) {
         const newLevel = Math.min(backoffLevel + 1, BACKOFF_CONFIG.maxLevel);
-        return { shouldFallback: true, cooldownMs: getQuotaCooldown(newLevel), newBackoffLevel: newLevel };
+        return { shouldFallback: true, cooldownMs: getQuotaCooldown(newLevel), newBackoffLevel: newLevel, scope: rule.scope || "model" };
       }
-      return { shouldFallback: true, cooldownMs: rule.cooldownMs };
+      return { shouldFallback: true, cooldownMs: rule.cooldownMs, scope: rule.scope || "model" };
     }
   }
 
@@ -53,14 +53,14 @@ export function checkFallbackError(status, errorText, backoffLevel = 0) {
   // ("all 1 accounts locked for <model> | lastError=[400]: ..."), which hides the
   // real cause from the caller and makes unrelated sessions look like they hit the
   // same limit. Hand the upstream error back for this request instead.
-  // Account-scoped statuses keep their rules above (401/402/403/404/429), and the
-  // text rules still win for rate-limit / quota / capacity wording.
+  // Explicit status and text rules above take precedence. Unmatched client errors
+  // remain request-scoped; they do not say the credential is unhealthy.
   if (status >= 400 && status < 500 && status !== 401 && status !== 402 && status !== 403 && status !== 429) {
-    return { shouldFallback: false, cooldownMs: 0 };
+    return { shouldFallback: false, cooldownMs: 0, scope: "none" };
   }
 
   // Default: transient cooldown for any unmatched error
-  return { shouldFallback: true, cooldownMs: TRANSIENT_COOLDOWN_MS };
+  return { shouldFallback: true, cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "model" };
 }
 
 /**
@@ -132,10 +132,10 @@ export function getModelLockKey(model) {
  * Reads flat field `modelLock_${model}` (or `modelLock___all` when model=null).
  */
 export function isModelLockActive(connection, model) {
-  const key = getModelLockKey(model);
-  const expiry = connection[key] || connection[MODEL_LOCK_ALL];
-  if (!expiry) return false;
-  return new Date(expiry).getTime() > Date.now();
+  const now = Date.now();
+  const modelExpiry = model ? connection[getModelLockKey(model)] : null;
+  const accountExpiry = connection[MODEL_LOCK_ALL];
+  return [modelExpiry, accountExpiry].some((expiry) => expiry && new Date(expiry).getTime() > now);
 }
 
 /**
