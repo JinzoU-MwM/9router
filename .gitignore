@@ -113,3 +113,6 @@ cli/prompts/
 
 # Local experiment dumps (operator workspace)
 _scratch/
+
+# Next dev scratch dir created inside the repo by isolated instances
+tmp/
