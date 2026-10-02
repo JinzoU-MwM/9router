@@ -105,7 +105,14 @@ describe("Kiro external_idp (CLIProxyAPI) import and refresh", () => {
     expect(headers.TokenType).toBe("EXTERNAL_IDP");
     expect(headers.tokentype).toBeUndefined();
 
+    // The q surface comes first for every auth method: kiro.dev's path gateway
+    // answers modern payloads with 400 REQUEST_BODY_INVALID (terminal in
+    // BaseExecutor), while an Amazon surface rejects a foreign token with
+    // 401/403, which does fall through to the next host.
     expect(executor.buildUrl("claude-sonnet-4.5", true, 0, credentials)).toBe(
+      "https://q.us-east-1.amazonaws.com/generateAssistantResponse"
+    );
+    expect(executor.buildUrl("claude-sonnet-4.5", true, 1, credentials)).toBe(
       "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse"
     );
   });

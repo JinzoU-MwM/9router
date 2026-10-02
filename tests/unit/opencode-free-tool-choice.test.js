@@ -20,6 +20,18 @@ function responsesBody(model, tool_choice) {
   return body;
 }
 
+// applyFingerprintTools() appends the official opencode CLI tools (bash, glob,
+// grep, read) to every free-tier body so the Console stops classifying traffic
+// as an unidentified client and rate-limiting it (commit 67271d85). Assertions
+// therefore check that the caller's tools survive *and* the fingerprint is on.
+const FINGERPRINT_TOOLS = ["bash", "glob", "grep", "read"];
+const toolNameOf = (t) => t?.name || t?.function?.name || t?.type;
+const expectToolsIncludingFingerprint = (tools, expected) => {
+  const names = (tools || []).map(toolNameOf);
+  for (const e of expected) expect(names).toContain(toolNameOf(e));
+  for (const f of FINGERPRINT_TOOLS) expect(names).toContain(f);
+};
+
 describe("opencode Free 1.3 tool_choice auto-only", () => {
   it("khai quirk đúng model 1.3-Free trong registry", () => {
     expect(PROVIDERS.opencode.quirks?.forceAutoToolChoiceModels).toEqual([FREE_13]);
@@ -36,7 +48,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
       const body = responsesBody(model, structuredClone(choice));
       const out = new OpenCodeExecutor().transformRequest(model, body, true, CREDS);
       expect(out.tool_choice).toBe("auto");
-      expect(out.tools).toEqual(TOOLS);
+      expectToolsIncludingFingerprint(out.tools, TOOLS);
       expect(out.input).toEqual(INPUT);
     }
   });
@@ -46,14 +58,17 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
       FREE_13, responsesBody(FREE_13, "auto"), true, CREDS,
     );
     expect(autoOut.tool_choice).toBe("auto");
-    expect(autoOut.tools).toEqual(TOOLS);
+    expectToolsIncludingFingerprint(autoOut.tools, TOOLS);
     expect(autoOut.input).toEqual(INPUT);
 
     const absentOut = new OpenCodeExecutor().transformRequest(
       FREE_13, responsesBody(FREE_13, undefined), true, CREDS,
     );
-    expect("tool_choice" in absentOut).toBe(false);
-    expect(absentOut.tools).toEqual(TOOLS);
+    // applyFingerprintTools() supplies the legacy Responses default when the
+    // caller sent none ("preserve the existing executor semantics"), so an
+    // absent tool_choice comes out as auto rather than staying absent.
+    expect(absentOut.tool_choice).toBe("auto");
+    expectToolsIncludingFingerprint(absentOut.tools, TOOLS);
     expect(absentOut.input).toEqual(INPUT);
   });
 
@@ -84,7 +99,7 @@ describe("opencode Free 1.3 tool_choice auto-only", () => {
     const sent = JSON.parse(actualInit.body);
     expect(sent.tool_choice).toBe("auto");
     expect(sent.model).toBe(FREE_13);
-    expect(sent.tools).toEqual(TOOLS);
+    expectToolsIncludingFingerprint(sent.tools, TOOLS);
     expect(sent.input).toEqual(INPUT);
   });
 });

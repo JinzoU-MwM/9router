@@ -215,13 +215,13 @@ describe("OpenCode Free Muse Spark thinking", () => {
     const types = out.input.map((item) => item.type);
     expect(types).toEqual(["message", "function_call", "function_call_output", "message"]);
     // Tools flattened and empty properties added
-    expect(out.tools).toEqual([
-      {
-        type: "function",
-        name: "shell",
-        description: "Run shell command",
-        parameters: { type: "object", properties: {} },
-      },
-    ]);
+    // The caller's tool survives; the official opencode CLI tools are appended
+    // by applyFingerprintTools() (commit 67271d85) so free-tier traffic is not
+    // rate-limited as an unidentified client.
+    const names = out.tools.map((t) => t?.name || t?.function?.name || t?.type);
+    expect(names).toContain("shell");
+    for (const f of ["bash", "glob", "grep", "read"]) expect(names).toContain(f);
+    const shell = out.tools.find((t) => (t?.name || t?.function?.name) === "shell");
+    expect(shell.parameters).toEqual({ type: "object", properties: {} });
   });
 });
