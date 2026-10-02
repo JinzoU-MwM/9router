@@ -50,11 +50,12 @@ const COOLDOWN = {
 /**
  * Unified error classification rules.
  * Checked top-to-bottom: text rules first (by order), then status rules.
- * Each rule: { text?, status?, cooldownMs?, backoff? }
+ * Each rule: { text?, status?, cooldownMs?, backoff?, scope? }
  *   - text: substring match (case-insensitive) on error message
  *   - status: HTTP status code match
  *   - cooldownMs: fixed cooldown duration
  *   - backoff: true = use exponential backoff (rate limit)
+ *   - scope: "model" (default) or "account" for failures shared across models
  */
 export const ERROR_RULES = [
   // --- Text-based rules (checked first, order = priority) ---
@@ -62,6 +63,15 @@ export const ERROR_RULES = [
   // Intl gateway blocks affect the account/IP, so let the connection back off.
   { provider: "codebuddy-intl", text: "request illegal", backoff: true },
   { provider: "codebuddy-intl", text: "conversation id missing", backoff: true },
+  // Transport failures belong to the selected connection's route (often its
+  // proxy), so keep it out of rotation for every model during the cooldown.
+  { text: "fetch failed",              cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "account" },
+  { text: "connect timeout",           cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "account" },
+  { text: "econnrefused",              cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "account" },
+  { text: "econnreset",                cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "account" },
+  { text: "enotfound",                 cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "account" },
+  { text: "etimedout",                 cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "account" },
+  { text: "socket hang up",            cooldownMs: TRANSIENT_COOLDOWN_MS, scope: "account" },
   { text: "no credentials",           cooldownMs: COOLDOWN.long },
   { text: "request not allowed",      cooldownMs: COOLDOWN.short },
   { text: "improperly formed request", cooldownMs: COOLDOWN.long },
@@ -74,7 +84,10 @@ export const ERROR_RULES = [
   { text: "overloaded",               backoff: true },
 
   // --- Status-based rules (fallback when text doesn't match) ---
-  { status: 401, cooldownMs: COOLDOWN.long },
+  // A final 401 is returned after provider-specific token refresh was tried.
+  // Lock the credential across models so every model doesn't repeat the same
+  // failed authentication attempt.
+  { status: 401, cooldownMs: COOLDOWN.long, scope: "account" },
   { status: 402, cooldownMs: COOLDOWN.long },
   { status: 403, cooldownMs: COOLDOWN.long },
   { status: 404, cooldownMs: COOLDOWN.long },

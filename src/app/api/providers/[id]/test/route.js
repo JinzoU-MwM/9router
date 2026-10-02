@@ -13,6 +13,7 @@ export async function POST(request, { params }) {
 
     return NextResponse.json({
       valid: result.valid,
+      testable: result.testable !== false,
       error: result.error,
       refreshed: result.refreshed || false,
     });
