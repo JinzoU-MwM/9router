@@ -84,7 +84,7 @@ export function hashKey(key) {
 
 const ARCHIVE_FILE = path.join(DATA_DIR, "bansos-purged.jsonl");
 
-function archivePurge(entry) {
+export function archivePurgeEntry(entry) {
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.appendFileSync(ARCHIVE_FILE, `${JSON.stringify(entry)}\n`, "utf8");
@@ -121,7 +121,7 @@ export async function purgeExhaustedConnection({ connectionId, provider, status,
   const baseUrl = conn.providerSpecificData?.baseUrl || node.baseUrl || null;
   const apiKey = conn.apiKey;
 
-  archivePurge({
+  archivePurgeEntry({
     at: new Date().toISOString(),
     nodeId: node.id,
     nodeName: node.name || null,
