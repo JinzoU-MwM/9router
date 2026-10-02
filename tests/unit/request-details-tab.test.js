@@ -22,7 +22,10 @@ beforeAll(async () => {
   vi.resetModules();
   db = await import("@/lib/db/index.js");
   await db.initDb();
-  await db.updateSettings({ enableObservability2: true, observabilityBatchSize: 1 });
+  // the setting the repo actually reads is `enableObservability`
+  // (requestDetailsRepo.js); `enableObservability2` left it false, so every
+  // saveRequestDetail in this file silently wrote nothing.
+  await db.updateSettings({ enableObservability: true, observabilityBatchSize: 1 });
 
   const { getAdapter } = await import("@/lib/db/driver.js");
   adapter = await getAdapter();
@@ -123,8 +126,24 @@ function getInputTokens(tokens) {
   return prompt < cache ? cache : prompt;
 }
 
+// The assertion below opens the backup with better-sqlite3 itself, which is an
+// optional dependency by design (install must not require build tools). Skip
+// instead of failing where the native binding is absent.
+const betterSqlite3Available = await (async () => {
+  try {
+    const Database = (await import("better-sqlite3")).default;
+    // The JS wrapper imports fine even when the native binding was never built;
+    // only constructing a handle proves the binding is usable.
+    const probe = new Database(":memory:");
+    probe.close();
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 describe("backupDbLite — excludes requestDetails, keeps critical data", () => {
-  it("backup file omits requestDetails rows but keeps other tables", async () => {
+  it.skipIf(!betterSqlite3Available)("backup file omits requestDetails rows but keeps other tables", async () => {
     const { backupDbLite } = await import("@/lib/db/backup.js");
     await saveDetail({ id: "bk-1", provider: "openai", model: "m", status: "ok", tokens: {}, request: {}, response: {} });
 

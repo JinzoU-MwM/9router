@@ -184,7 +184,7 @@ describe("openaiToCommandCodeRequest — native image blocks", () => {
   const PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const DATA_URI = `data:image/png;base64,${PNG_B64}`;
 
-  it("maps OpenAI image_url data URI to CommandCode {type:image,image,mimeType}", () => {
+  it("maps OpenAI image_url data URI to CommandCode {type:image,image,mimeType,mediaType}", () => {
     const out = openaiToCommandCodeRequest(MODEL, {
       messages: [{
         role: "user",
@@ -195,9 +195,11 @@ describe("openaiToCommandCodeRequest — native image blocks", () => {
       }],
     }, true);
 
+    // mediaType rides along with mimeType since f4f06f29 (CommandCode reads
+    // either spelling depending on client).
     expect(out.params.messages[0].content).toEqual([
       { type: "text", text: "what color?" },
-      { type: "image", image: DATA_URI, mimeType: "image/png" },
+      { type: "image", image: DATA_URI, mimeType: "image/png", mediaType: "image/png" },
     ]);
   });
 
@@ -212,7 +214,7 @@ describe("openaiToCommandCodeRequest — native image blocks", () => {
     }, true);
 
     expect(out.params.messages[0].content).toEqual([
-      { type: "image", image: DATA_URI, mimeType: "image/png" },
+      { type: "image", image: DATA_URI, mimeType: "image/png", mediaType: "image/png" },
     ]);
   });
 

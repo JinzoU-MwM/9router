@@ -116,12 +116,19 @@ describe("commandcode-to-openai — finish", () => {
 });
 
 describe("commandcode-to-openai — error event", () => {
-  it("stringifies object errors so client sees readable message", () => {
-    const { chunks } = feed([
-      { type: "error", error: { type: "server_error", message: "Boom" } },
-    ]);
-    const text = chunks[0].choices[0].delta.content;
-    expect(text).toContain("Boom");
-    expect(text).not.toContain("[object Object]");
+  // A mid-stream error is thrown, not emitted as fake content with
+  // finish_reason:"stop" (response/commandcode-to-openai.js case "error"), so
+  // the stream handler marks the stream errored. The assertion still guards the
+  // original symptom: an object error must read as JSON, never "[object Object]".
+  it("throws a readable error for object errors", () => {
+    let caught = null;
+    try {
+      feed([{ type: "error", error: { type: "server_error", message: "Boom" } }]);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeTruthy();
+    expect(caught.message).toContain("Boom");
+    expect(caught.message).not.toContain("[object Object]");
   });
 });
