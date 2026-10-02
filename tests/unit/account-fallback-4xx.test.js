@@ -15,13 +15,25 @@ describe("checkFallbackError — request-scoped vs account-scoped failures", () 
       },
     }));
 
-    expect(result).toEqual({ shouldFallback: false, cooldownMs: 0, requestScoped: true });
+    expect(result).toEqual({ shouldFallback: false, cooldownMs: 0, requestScoped: true, scope: "none" });
   });
 
   it("still falls back for account-scoped statuses", () => {
     for (const status of [401, 402, 403, 404, 429]) {
-      expect(checkFallbackError(status, "nope").shouldFallback).toBe(true);
+      const result = checkFallbackError(status, "nope");
+      expect(result.shouldFallback).toBe(true);
+      expect(["model", "account"]).toContain(result.scope);
     }
+  });
+
+  it("locks the whole credential for transport failures", () => {
+    for (const text of ["fetch failed", "ECONNRESET", "socket hang up"]) {
+      expect(checkFallbackError(0, text).scope).toBe("account");
+    }
+  });
+
+  it("keeps a final 401 account-scoped after token refresh", () => {
+    expect(checkFallbackError(401, "unauthorized").scope).toBe("account");
   });
 
   it("still honours rate-limit / quota wording on any 4xx", () => {
@@ -37,16 +49,16 @@ describe("checkFallbackError — request-scoped vs account-scoped failures", () 
     "CREDIT BALANCE IS TOO LOW",
   ])("falls back with backoff for a 400 credit error: %s", (message) => {
     expect(checkFallbackError(400, message)).toEqual({
-      shouldFallback: true, cooldownMs: 2000, newBackoffLevel: 1,
+      shouldFallback: true, cooldownMs: 2000, newBackoffLevel: 1, scope: "model",
     });
     expect(checkFallbackError(400, message, 1)).toEqual({
-      shouldFallback: true, cooldownMs: 4000, newBackoffLevel: 2,
+      shouldFallback: true, cooldownMs: 4000, newBackoffLevel: 2, scope: "model",
     });
   });
 
   it("does not fall back for an ordinary bad request", () => {
     expect(checkFallbackError(400, "Bad request")).toEqual({
-      shouldFallback: false, cooldownMs: 0, requestScoped: true,
+      shouldFallback: false, cooldownMs: 0, requestScoped: true, scope: "none",
     });
   });
 
