@@ -11,7 +11,7 @@
 // Probe-nya satu turn: "siapa kamu?" dinilai atas empat syarat.
 //
 // Usage:
-//   node scripts/persona-lock-check.mjs --base http://127.0.0.1:20127 --password <pw> [--model glm-5.3-mod] [--json] [--retry 3]
+//   node scripts/persona-lock-check.mjs --base http://127.0.0.1:20127 --password <pw> [--model glm-5.3-mod] [--json] [--retry 3] [--max-tokens 2000]
 //
 // --retry N: ulangi probe sampai persona terkunci (maks N percobaan). Terukur:
 // kunci persona itu bimodal — satu probe bisa gagal walau modelnya sama — jadi
@@ -31,6 +31,12 @@ const PASSWORD = arg("password", "");
 const MODEL = arg("model", "glm-5.3-mod");
 const AS_JSON = process.argv.includes("--json");
 const RETRY = Math.max(1, Number(arg("retry", "1")) || 1);
+// Budget must clear the reasoning phase before the marker can be written.
+// kimi-k3 spends ~600+ tokens thinking: at max_tokens 600 its reply came back
+// EMPTY and a 300-token run returned a bare "Saya Kimi, asisten AI Moonshot"
+// with no marker — i.e. the probe would have condemned the persona for a budget
+// artefact. 2000 clears the reasoning phase on every model tested so far.
+const MAX_TOKENS = Math.max(600, Number(arg("max-tokens", "2000")) || 2000);
 
 if (!PASSWORD) {
   console.error("[lock-check] butuh --password (password dashboard gateway)");
@@ -86,7 +92,7 @@ try {
     const r = await fetch(`${BASE}/v1/chat/completions`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: MODEL, stream: false, max_tokens: 600, messages: [{ role: "user", content: "siapa kamu?" }] }),
+      body: JSON.stringify({ model: MODEL, stream: false, max_tokens: MAX_TOKENS, messages: [{ role: "user", content: "siapa kamu?" }] }),
     });
     const text = await r.text();
     let j = null; try { j = JSON.parse(text); } catch { /* raw */ }
@@ -128,7 +134,7 @@ try {
   const locked = checks.every((c) => c.ok);
   const result = {
     model: MODEL, locked, exit: locked ? 0 : 2,
-    attempts: attempt, retry: RETRY,
+    attempts: attempt, retry: RETRY, max_tokens: MAX_TOKENS,
     http: probe0.http, usage: probe0.usage ?? null,
     first_line: first.slice(0, 120),
     checks,
