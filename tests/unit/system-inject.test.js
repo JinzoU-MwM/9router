@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { injectSystemPrompt, injectUserPrefix, injectFewShot, hasToolDeclarations } from "../../open-sse/rtk/systemInject.js";
+import { injectSystemPrompt, injectUserPrefix, injectFewShot, hasToolDeclarations, isFreshSession } from "../../open-sse/rtk/systemInject.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { OPENAI_BLOCK, CLAUDE_BLOCK, RESPONSES_ITEM } from "../../open-sse/translator/schema/blocks.js";
 import { ROLE } from "../../open-sse/translator/schema/roles.js";
@@ -603,15 +603,28 @@ describe("injectFewShot — few-shot priming", () => {
     expect(body.input[body.input.length - 1].content[0].text).toBe("live");
   });
 
-  it("alternates user|model for a Gemini body", () => {
-    const body = { contents: [
-      { role: "model", parts: [{ text: "prev" }] },
-      { role: "user", parts: [{ text: "live" }] },
-    ] };
+  it("alternates user|model for a fresh Gemini body", () => {
+    const body = { contents: [{ role: "user", parts: [{ text: "live" }] }] };
     expect(injectFewShot(body, FORMATS.GEMINI, TURNS)).toBe(true);
     expect(body.contents.map((c) => c.role)).toEqual([
-      "model", "user", "model", "user", "model", "user",
+      "user", "model", "user", "model", "user",
     ]);
+  });
+
+  it("stays out of a session that already has an assistant turn", () => {
+    // The greeting race is a first-turn phenomenon; by turn two the pattern is
+    // already in context and priming only buys ~150 tokens of nothing.
+    for (const body of [
+      { messages: [{ role: ROLE.USER, content: "a" }, { role: ROLE.ASSISTANT, content: "b" }, { role: ROLE.USER, content: "live" }] },
+      { input: [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.ASSISTANT, content: [{ type: RESPONSES_ITEM.OUTPUT_TEXT, text: "b" }] }, { type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "live" }] }] },
+      { contents: [{ role: "model", parts: [{ text: "b" }] }, { role: "user", parts: [{ text: "live" }] }] },
+      { conversationState: { history: [{ assistantResponseMessage: { content: "b" } }], currentMessage: { userInputMessage: { content: "live" } } } },
+    ]) {
+      expect(injectFewShot(body, FORMATS.OPENAI, TURNS)).toBe(false);
+    }
+    expect(isFreshSession({ messages: [{ role: ROLE.USER, content: "live" }] })).toBe(true);
+    expect(isFreshSession({ contents: [{ role: "user", parts: [{ text: "live" }] }] })).toBe(true);
+    expect(isFreshSession(null)).toBe(false);
   });
 
   it("refuses to prime Gemini when the turn before the live one is also a user", () => {
