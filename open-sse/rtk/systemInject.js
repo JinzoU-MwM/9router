@@ -4,9 +4,67 @@
 
 import { FORMATS } from "../translator/formats.js";
 import { OPENAI_BLOCK, CLAUDE_BLOCK, RESPONSES_ITEM } from "../translator/schema/blocks.js";
-import { ROLE } from "../translator/schema/roles.js";
+import { ROLE, GEMINI_ROLE } from "../translator/schema/roles.js";
 
 const SEP = "\n\n";
+
+// ── Gemini / Antigravity / Kiro shape helpers ───────────────────────────────
+// Gemini keeps the system text in `systemInstruction` and the turns in
+// `contents` (roles user/model — there is no system role), and Antigravity
+// wraps both under `request`. Kiro keeps turns under `conversationState`.
+// The recency/prefix helpers below must target those fields directly instead of
+// scanning messages[], or they silently no-op on exactly the providers whose
+// system message is most fragile.
+export function geminiHost(body) {
+  if (!body || typeof body !== "object") return null;
+  const req = body.request;
+  if (req && typeof req === "object"
+    && (Array.isArray(req.contents) || req.systemInstruction || req.system_instruction)) {
+    return req;
+  }
+  if (Array.isArray(body.contents) || body.systemInstruction || body.system_instruction) return body;
+  return null;
+}
+
+function geminiSystemKey(host) {
+  return Object.prototype.hasOwnProperty.call(host, "system_instruction")
+    ? "system_instruction" : "systemInstruction";
+}
+
+function geminiLastUserContent(host) {
+  const contents = host && Array.isArray(host.contents) ? host.contents : null;
+  if (!contents) return null;
+  for (let i = contents.length - 1; i >= 0; i--) {
+    const c = contents[i];
+    if (c && c.role === GEMINI_ROLE.USER && Array.isArray(c.parts)) return c;
+  }
+  return null;
+}
+
+export function kiroLiveUserMessage(body) {
+  const cs = body && body.conversationState;
+  if (!cs || typeof cs !== "object") return null;
+  const cur = cs.currentMessage && cs.currentMessage.userInputMessage;
+  if (cur && typeof cur === "object") return cur;
+  if (Array.isArray(cs.history)) {
+    for (let i = cs.history.length - 1; i >= 0; i--) {
+      const it = cs.history[i];
+      if (it && it.userInputMessage) return it.userInputMessage;
+    }
+  }
+  return null;
+}
+
+// Gemini content parts hold either {text} or a tool call/response part. Only a
+// text part can carry the directive.
+function prefixGeminiUserTurn(host, prefix, has) {
+  const user = geminiLastUserContent(host);
+  if (!user) return false;
+  const first = user.parts.find((p) => p && typeof p.text === "string");
+  if (!first || has(first.text)) return false;
+  try { first.text = `${prefix} ${first.text}`; } catch (_) { return false; }
+  return true;
+}
 // Multi-part variant: inserts each part as its own system message/block, in
 // order, after any existing system content. Used for large persona documents
 // where a single message would breach upstream per-message limits or dilute
@@ -329,7 +387,10 @@ function injectKiroSystem(body, prompt) {
 export function injectUserPrefix(body, format, prefix) {
   try {
     if (!body || !prefix || typeof body !== "object") return;
-    const has = (s) => typeof s === "string" && s.startsWith(prefix);
+    // "Already injected" is a containment test, not a position test: the persona
+    // anchors and the persona-in-user block are written into the same turn, so a
+    // second pass would otherwise re-prefix and duplicate the marker.
+    const has = (s) => typeof s === "string" && s.includes(prefix);
 
     // OpenAI chat messages[]: prefix the last user message.
     if (Array.isArray(body.messages)) {
@@ -350,6 +411,23 @@ export function injectUserPrefix(body, format, prefix) {
           return;
         }
       }
+      return;
+    }
+
+    // Gemini / Antigravity: contents[] (user/model roles). No messages[]/input[].
+    const gHost = geminiHost(body);
+    if (gHost) {
+      prefixGeminiUserTurn(gHost, prefix, has);
+      return;
+    }
+
+    // Kiro: the live turn is conversationState.currentMessage (or the last
+    // history turn). injectKiroSystem already writes the persona here.
+    const kiroMsg = kiroLiveUserMessage(body);
+    if (kiroMsg) {
+      const c = typeof kiroMsg.content === "string" ? kiroMsg.content : "";
+      if (has(c)) return;
+      try { kiroMsg.content = `${prefix} ${c}`; } catch (_) {}
       return;
     }
 
@@ -407,6 +485,26 @@ export function injectPersonaIntoUser(body, format, persona, opts = {}) {
       }
       return false;
     };
+
+    // Gemini / Antigravity: the user turn is contents[] with parts[].
+    const gHost = geminiHost(body);
+    if (gHost) {
+      const user = geminiLastUserContent(gHost);
+      if (!user) return false;
+      const first = user.parts.find((p) => p && typeof p.text === "string");
+      if (!first || first.text.includes(END)) return false;
+      try { first.text = `${block}${first.text}`; } catch (_) { return false; }
+      return true;
+    }
+
+    // Kiro: live turn lives in conversationState.
+    const kiroMsg = kiroLiveUserMessage(body);
+    if (kiroMsg) {
+      const c = typeof kiroMsg.content === "string" ? kiroMsg.content : "";
+      if (c.includes(END)) return false;
+      try { kiroMsg.content = `${block}${c}`; } catch (_) { return false; }
+      return true;
+    }
 
     if (Array.isArray(body.messages)) {
       for (let i = body.messages.length - 1; i >= 0; i--) {

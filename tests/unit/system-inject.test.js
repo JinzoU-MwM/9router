@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { injectSystemPrompt } from "../../open-sse/rtk/systemInject.js";
+import { injectSystemPrompt, injectUserPrefix } from "../../open-sse/rtk/systemInject.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { OPENAI_BLOCK, CLAUDE_BLOCK, RESPONSES_ITEM } from "../../open-sse/translator/schema/blocks.js";
 import { ROLE } from "../../open-sse/translator/schema/roles.js";
@@ -490,5 +490,83 @@ describe("system-inject fail-open", () => {
     expect(texts2.some(t => t.includes(PONYTAIL_PROMPTS.full.slice(0, 30)))).toBe(true);
     expect(texts2.some(t => t.includes(CAVEMAN_PROMPTS.full.slice(0, 30)))).toBe(true);
     expect(body.messages[0]).toEqual({ role: ROLE.SYSTEM, content: "base" });
+  });
+});
+
+// Gemini / Antigravity keep turns in contents[] (roles user/model — there is no
+// system role) and Antigravity wraps them under `request`; Kiro keeps them under
+// conversationState. injectUserPrefix used to scan only messages[]/input[], so
+// the anti-greeting marker silently never landed on any of those providers.
+describe("injectUserPrefix — gemini / antigravity / kiro shapes", () => {
+  const MARK = "[TASK-DIRECT]";
+
+  it("prefixes the last user part of a Gemini contents[] body", () => {
+    const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }] };
+    injectUserPrefix(body, FORMATS.GEMINI, MARK);
+    expect(body.contents[0].parts[0].text).toBe(`${MARK} hi`);
+  });
+
+  it("prefixes only the LAST user content", () => {
+    const body = { contents: [
+      { role: "user", parts: [{ text: "first" }] },
+      { role: "model", parts: [{ text: "ok" }] },
+      { role: "user", parts: [{ text: "second" }] },
+    ] };
+    injectUserPrefix(body, FORMATS.GEMINI, MARK);
+    expect(body.contents[0].parts[0].text).toBe("first");
+    expect(body.contents[2].parts[0].text).toBe(`${MARK} second`);
+  });
+
+  it("skips a leading non-text part and uses the first text part", () => {
+    const body = { contents: [{ role: "user", parts: [{ functionCall: { name: "f" } }, { text: "hi" }] }] };
+    injectUserPrefix(body, FORMATS.GEMINI, MARK);
+    expect(body.contents[0].parts[0].functionCall).toEqual({ name: "f" });
+    expect(body.contents[0].parts[1].text).toBe(`${MARK} hi`);
+  });
+
+  it("reaches Antigravity's request-wrapped contents", () => {
+    const body = { project: "p", request: { contents: [{ role: "user", parts: [{ text: "hi" }] }] } };
+    injectUserPrefix(body, FORMATS.ANTIGRAVITY, MARK);
+    expect(body.request.contents[0].parts[0].text).toBe(`${MARK} hi`);
+  });
+
+  it("prefixes the Kiro live turn", () => {
+    const body = { conversationState: { currentMessage: { userInputMessage: { content: "hi" } } } };
+    injectUserPrefix(body, FORMATS.KIRO, MARK);
+    expect(body.conversationState.currentMessage.userInputMessage.content).toBe(`${MARK} hi`);
+  });
+
+  it("falls back to the last Kiro history turn when there is no live turn", () => {
+    const body = { conversationState: { history: [
+      { userInputMessage: { content: "old" } },
+      { assistantResponseMessage: { content: "ok" } },
+    ] } };
+    injectUserPrefix(body, FORMATS.KIRO, MARK);
+    expect(body.conversationState.history[0].userInputMessage.content).toBe(`${MARK} old`);
+  });
+
+  it("is idempotent on every new shape", () => {
+    const cases = [
+      [{ contents: [{ role: "user", parts: [{ text: "hi" }] }] }, FORMATS.GEMINI],
+      [{ request: { contents: [{ role: "user", parts: [{ text: "hi" }] }] } }, FORMATS.ANTIGRAVITY],
+      [{ conversationState: { currentMessage: { userInputMessage: { content: "hi" } } } }, FORMATS.KIRO],
+    ];
+    for (const [b, f] of cases) {
+      injectUserPrefix(b, f, MARK);
+      injectUserPrefix(b, f, MARK);
+      expect(JSON.stringify(b).split(MARK).length - 1).toBe(1);
+    }
+  });
+
+  it("leaves a body with no user turn untouched", () => {
+    const body = { contents: [{ role: "model", parts: [{ text: "prev" }] }] };
+    injectUserPrefix(body, FORMATS.GEMINI, MARK);
+    expect(body.contents[0].parts[0].text).toBe("prev");
+  });
+
+  it("fail-open on a frozen Gemini body", () => {
+    const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }] };
+    Object.freeze(body.contents[0].parts[0]);
+    expect(() => injectUserPrefix(body, FORMATS.GEMINI, MARK)).not.toThrow();
   });
 });

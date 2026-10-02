@@ -147,6 +147,72 @@ describe("customPrompt persona injection (PRESIDENSIAL)", () => {
   });
 });
 
+// The amplification layer must reach the formats that carry no system role:
+// Gemini / Antigravity (systemInstruction + contents[]) and Kiro
+// (conversationState). Before this fix the task-direct marker, the precedence
+// anchor and the recency identity anchor all silently no-opped there.
+describe("amplification reaches gemini / antigravity / kiro", () => {
+  const clientSystem = "CLIENT SYSTEM RULES ".repeat(30); // > CLIENT_PERSONA_MIN
+
+  it("gemini: persona + marker + precedence + identity anchor", () => {
+    const body = {
+      systemInstruction: { parts: [{ text: clientSystem }] },
+      contents: [{ role: "user", parts: [{ text: "do the task" }] }],
+    };
+    injectCustomPrompt(body, FORMATS.GEMINI, "glm-5.3", "glm-5.3-mod");
+    const sys = body.systemInstruction.parts.map((p) => p.text || "").join("\n");
+    expect(sys).toContain("RAKYAT JELATA");
+    expect(sys).toContain("AUTHORITY PRECEDENCE");
+    expect(sys).toContain("IDENTITY REINFORCED");
+    expect(body.contents[0].parts[0].text).toBe("[TASK-DIRECT] do the task");
+  });
+
+  it("antigravity: same, under request", () => {
+    const body = {
+      project: "p",
+      request: {
+        systemInstruction: { parts: [{ text: clientSystem }] },
+        contents: [{ role: "user", parts: [{ text: "do the task" }] }],
+      },
+    };
+    injectCustomPrompt(body, FORMATS.ANTIGRAVITY, "glm-5.3", "glm-5.3-mod");
+    const sys = body.request.systemInstruction.parts.map((p) => p.text || "").join("\n");
+    expect(sys).toContain("RAKYAT JELATA");
+    expect(sys).toContain("IDENTITY REINFORCED");
+    expect(body.request.contents[0].parts[0].text).toBe("[TASK-DIRECT] do the task");
+  });
+
+  it("kiro: persona + marker + identity anchor on the live turn", () => {
+    const body = { conversationState: { currentMessage: { userInputMessage: { content: "do the task" } } } };
+    injectCustomPrompt(body, FORMATS.KIRO, "glm-5.3", "glm-5.3-mod");
+    const c = body.conversationState.currentMessage.userInputMessage.content;
+    expect(c).toContain("RAKYAT JELATA");
+    expect(c).toContain("IDENTITY REINFORCED");
+    expect(c).toContain("[TASK-DIRECT] do the task");
+  });
+
+  it("gemini / antigravity / kiro are idempotent across a retry", () => {
+    const bodies = [
+      [{ systemInstruction: { parts: [{ text: clientSystem }] }, contents: [{ role: "user", parts: [{ text: "t" }] }] }, FORMATS.GEMINI],
+      [{ request: { systemInstruction: { parts: [{ text: clientSystem }] }, contents: [{ role: "user", parts: [{ text: "t" }] }] } }, FORMATS.ANTIGRAVITY],
+      [{ conversationState: { currentMessage: { userInputMessage: { content: "t" } } } }, FORMATS.KIRO],
+    ];
+    for (const [b, f] of bodies) {
+      injectCustomPrompt(b, f, "glm-5.3", "glm-5.3-mod");
+      const once = JSON.stringify(b);
+      injectCustomPrompt(b, f, "glm-5.3", "glm-5.3-mod");
+      expect(JSON.stringify(b)).toBe(once);
+    }
+  });
+
+  it("gemini without a client persona adds no precedence anchor", () => {
+    const body = { contents: [{ role: "user", parts: [{ text: "t" }] }] };
+    injectCustomPrompt(body, FORMATS.GEMINI, "glm-5.3", "glm-5.3-mod");
+    expect(JSON.stringify(body)).not.toContain("AUTHORITY PRECEDENCE");
+    expect(JSON.stringify(body)).toContain("IDENTITY REINFORCED");
+  });
+});
+
 describe("injectUserPrefix (anti-greeting-race)", () => {
   const MARK = "[TASK-DIRECT]";
 
