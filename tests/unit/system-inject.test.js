@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { injectSystemPrompt, injectUserPrefix } from "../../open-sse/rtk/systemInject.js";
+import { injectSystemPrompt, injectUserPrefix, injectFewShot, hasToolDeclarations } from "../../open-sse/rtk/systemInject.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { OPENAI_BLOCK, CLAUDE_BLOCK, RESPONSES_ITEM } from "../../open-sse/translator/schema/blocks.js";
 import { ROLE } from "../../open-sse/translator/schema/roles.js";
@@ -568,5 +568,96 @@ describe("injectUserPrefix — gemini / antigravity / kiro shapes", () => {
     const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }] };
     Object.freeze(body.contents[0].parts[0]);
     expect(() => injectUserPrefix(body, FORMATS.GEMINI, MARK)).not.toThrow();
+  });
+});
+
+// Few-shot priming. Restating a rule costs instruction weight, and instruction
+// weight is what trips a filter; showing the same behaviour inside real
+// assistant turns does not. The turns go immediately BEFORE the live user turn
+// so the worked example is the last thing read before the model has to answer.
+describe("injectFewShot — few-shot priming", () => {
+  const TURNS = [
+    { role: "user", content: "ASK-1" },
+    { role: "assistant", content: "MARK 1" },
+    { role: "user", content: "ASK-2" },
+    { role: "assistant", content: "MARK 2" },
+  ];
+
+  it("splices the pairs before the live user turn (chat)", () => {
+    const body = { messages: [{ role: ROLE.SYSTEM, content: "sys" }, { role: ROLE.USER, content: "live" }] };
+    expect(injectFewShot(body, FORMATS.OPENAI, TURNS)).toBe(true);
+    expect(body.messages.map((m) => m.role)).toEqual([
+      ROLE.SYSTEM, ROLE.USER, ROLE.ASSISTANT, ROLE.USER, ROLE.ASSISTANT, ROLE.USER,
+    ]);
+    expect(body.messages[1].content).toBe("ASK-1");
+    expect(body.messages[body.messages.length - 1].content).toBe("live");
+  });
+
+  it("uses typed items for a Responses input[] body", () => {
+    const body = { input: [{ type: RESPONSES_ITEM.MESSAGE, role: ROLE.USER, content: [{ type: RESPONSES_ITEM.INPUT_TEXT, text: "live" }] }] };
+    expect(injectFewShot(body, FORMATS.OPENAI_RESPONSES, TURNS)).toBe(true);
+    expect(body.input).toHaveLength(5);
+    expect(body.input[0].role).toBe(ROLE.USER);
+    expect(body.input[1].role).toBe(ROLE.ASSISTANT);
+    expect(body.input[1].content[0].type).toBe(RESPONSES_ITEM.OUTPUT_TEXT);
+    expect(body.input[body.input.length - 1].content[0].text).toBe("live");
+  });
+
+  it("alternates user|model for a Gemini body", () => {
+    const body = { contents: [
+      { role: "model", parts: [{ text: "prev" }] },
+      { role: "user", parts: [{ text: "live" }] },
+    ] };
+    expect(injectFewShot(body, FORMATS.GEMINI, TURNS)).toBe(true);
+    expect(body.contents.map((c) => c.role)).toEqual([
+      "model", "user", "model", "user", "model", "user",
+    ]);
+  });
+
+  it("refuses to prime Gemini when the turn before the live one is also a user", () => {
+    const body = { contents: [
+      { role: "user", parts: [{ text: "a" }] },
+      { role: "user", parts: [{ text: "live" }] },
+    ] };
+    expect(injectFewShot(body, FORMATS.GEMINI, TURNS)).toBe(false);
+    expect(body.contents).toHaveLength(2);
+  });
+
+  it("stays out of a request that declares tools", () => {
+    const body = { messages: [{ role: ROLE.USER, content: "live" }], tools: [{ type: "function", function: { name: "f" } }] };
+    expect(hasToolDeclarations(body)).toBe(true);
+    expect(injectFewShot(body, FORMATS.OPENAI, TURNS)).toBe(false);
+    expect(body.messages).toHaveLength(1);
+  });
+
+  it("detects tools on the Gemini and Kiro shapes too", () => {
+    expect(hasToolDeclarations({ request: { contents: [], tools: [{ name: "f" }] } })).toBe(true);
+    expect(hasToolDeclarations({ conversationState: { currentMessage: { userInputMessage: { userInputMessageContext: { tools: [{ name: "f" }] } } } } })).toBe(true);
+    expect(hasToolDeclarations({ messages: [] })).toBe(false);
+  });
+
+  it("is idempotent — a primed body is left untouched", () => {
+    const body = { messages: [{ role: ROLE.USER, content: "live" }] };
+    injectFewShot(body, FORMATS.OPENAI, TURNS);
+    const once = body.messages.length;
+    expect(injectFewShot(body, FORMATS.OPENAI, TURNS)).toBe(false);
+    expect(body.messages.length).toBe(once);
+  });
+
+  it("no-ops without a live user turn, on an incomplete pair, or on junk", () => {
+    expect(injectFewShot({ messages: [{ role: ROLE.SYSTEM, content: "s" }] }, FORMATS.OPENAI, TURNS)).toBe(false);
+    expect(injectFewShot({ messages: [{ role: ROLE.USER, content: "live" }] }, FORMATS.OPENAI, [{ role: "user", content: "only" }])).toBe(false);
+    expect(injectFewShot({ messages: [] }, FORMATS.OPENAI, null)).toBe(false);
+  });
+
+  it("fail-open on a frozen body", () => {
+    const body = { messages: [{ role: ROLE.USER, content: "live" }] };
+    Object.freeze(body.messages);
+    expect(() => injectFewShot(body, FORMATS.OPENAI, TURNS)).not.toThrow();
+  });
+
+  it("does not prime a Kiro body (translator owns that item shape)", () => {
+    const body = { conversationState: { currentMessage: { userInputMessage: { content: "live" } } } };
+    expect(injectFewShot(body, FORMATS.KIRO, TURNS)).toBe(false);
   });
 });
