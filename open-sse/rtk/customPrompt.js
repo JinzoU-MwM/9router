@@ -131,7 +131,24 @@ const PERSONA = {
   marks: ["RAKYAT JELATA", "PRESIDENSIAL-OS", "AMANAT-EXEC", "[RAKYAT]"],
 };
 
-const OWN_TEXT_MARKS = [...PERSONA.marks, "AUTHORITY PRECEDENCE", "IDENTITY REINFORCED", "# PRESIDENSIAL"];
+// Text this gateway injects itself. detectClientPersona must not count any of it
+// as the client's own persona: a false positive spends an AUTHORITY PRECEDENCE
+// anchor (~56 tok) on every request AND asserts precedence over a prompt this
+// gateway wrote seconds earlier. caveman/ponytail are injected by chatCore
+// before this module runs, so they arrive looking like client text.
+const OWN_TEXT_MARKS = [
+  ...PERSONA.marks,
+  "AUTHORITY PRECEDENCE",
+  "IDENTITY REINFORCED",
+  "# PRESIDENSIAL",
+  // token-saver prompts (open-sse/rtk/cavemanPrompts.js, ponytailPrompt.js)
+  "Respond like terse caveman",
+  "Respond tersely. Keep grammar and full sentences",
+  "Respond semi-classical",
+  "Respond classical Chinese",
+  "Respond extreme classical compression",
+  "You are a lazy senior developer",
+];
 
 function withChainAnchor(parts, anchor) {
   if (parts.length <= 1) return parts;

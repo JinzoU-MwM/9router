@@ -113,10 +113,39 @@ function lastIndexWhere(arr, pred) {
   return -1;
 }
 
+// A session is "fresh" when the client has not sent an assistant turn yet. The
+// greeting race priming exists for is a first-turn phenomenon: once the model
+// can see its own prior turns, the pattern is already in context and another
+// 150 tokens of worked example buys nothing. Cheap on every later turn.
+export function isFreshSession(body) {
+  try {
+    if (!body || typeof body !== "object") return false;
+    if (Array.isArray(body.messages)) {
+      return !body.messages.some((m) => m && m.role === ROLE.ASSISTANT);
+    }
+    if (Array.isArray(body.input)) {
+      return !body.input.some((m) => m && m.role === ROLE.ASSISTANT);
+    }
+    const gHost = geminiHost(body);
+    if (gHost && Array.isArray(gHost.contents)) {
+      return !gHost.contents.some((c) => c && c.role === GEMINI_ROLE.MODEL);
+    }
+    const cs = body.conversationState;
+    if (cs && typeof cs === "object") {
+      if (Array.isArray(cs.history) && cs.history.some((it) => it && it.assistantResponseMessage)) return false;
+      return true;
+    }
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 export function injectFewShot(body, format, turns) {
   try {
     if (!body || typeof body !== "object") return false;
     if (hasToolDeclarations(body)) return false;
+    if (!isFreshSession(body)) return false;
     const clean = (Array.isArray(turns) ? turns : []).filter(
       (t) => t && (t.role === ROLE.USER || t.role === ROLE.ASSISTANT)
         && typeof t.content === "string" && t.content.length > 0

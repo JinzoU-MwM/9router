@@ -374,16 +374,41 @@ describe("few-shot priming (prefill.json)", () => {
     expect(body.messages[body.messages.length - 1].content).toBe("[TASK-DIRECT] kerjakan");
   });
 
-  it("primes a gemini body without breaking user|model alternation", () => {
-    const body = { contents: [
-      { role: "model", parts: [{ text: "prev" }] },
-      { role: "user", parts: [{ text: "kerjakan" }] },
-    ] };
+  it("primes a fresh gemini body without breaking user|model alternation", () => {
+    const body = { contents: [{ role: "user", parts: [{ text: "kerjakan" }] }] };
     injectCustomPrompt(body, FORMATS.GEMINI, "glm-5.3", "glm-5.3-mod");
+    expect(body.contents.filter((c) => c.role === "model").length).toBe(3);
     for (let i = 1; i < body.contents.length; i++) {
       expect(body.contents[i].role).not.toBe(body.contents[i - 1].role);
     }
     expect(body.contents[body.contents.length - 1].role).toBe("user");
+  });
+
+  // Token-saver prompts are injected by chatCore BEFORE this module runs, so
+  // detectClientPersona used to count them as the client's own persona: every
+  // request then paid an AUTHORITY PRECEDENCE anchor (~52 tok) asserting that
+  // the gateway persona outranks... another gateway prompt.
+  it("does not treat a gateway token-saver prompt as the client's persona", () => {
+    for (const saver of [
+      "Respond like terse caveman. All technical substance stay exact, only fluff die.",
+      "You are a lazy senior developer. Lazy means efficient, not careless.",
+    ]) {
+      const body = { messages: [
+        { role: ROLE.SYSTEM, content: saver.repeat(4) },
+        { role: ROLE.USER, content: "kerjakan" },
+      ] };
+      injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3", "glm-5.3-mod");
+      expect(systemTexts(body).join("\n")).not.toContain("AUTHORITY PRECEDENCE");
+    }
+  });
+
+  it("still asserts precedence over a genuine client persona", () => {
+    const body = { messages: [
+      { role: ROLE.SYSTEM, content: "You are Jarvis, the user's personal butler. ".repeat(8) },
+      { role: ROLE.USER, content: "kerjakan" },
+    ] };
+    injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3", "glm-5.3-mod");
+    expect(systemTexts(body).join("\n")).toContain("AUTHORITY PRECEDENCE");
   });
 
   it("skips priming when the request declares tools", () => {

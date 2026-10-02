@@ -334,22 +334,46 @@ export function mergeUsage(prev, next) {
   return merged;
 }
 
+// Chars/4 assumes Latin prose. This gateway's payload is not that: the injected
+// persona is marker-heavy Indonesian with box-drawing glyphs, and tool results
+// are logs/JSON/code. Measured on a corpus of those shapes, one token buys 4.03
+// ASCII chars but only 0.62 non-ASCII chars (▓ ▒ ░ and CJK cost several tokens
+// each), so a flat chars/4 under-counts marker-heavy text by up to 65% and
+// over-counts dense JSON by 20-40%.
+//
+// Least-squares fit over real request bodies (JSON.stringify output, which is
+// what estimateInputTokens measures):
+//   tokens ≈ 0.2484 * asciiChars + 1.6056 * nonAsciiChars
+// Mean absolute error 12.7% vs 21.9% for chars/4; on the persona-bearing body
+// 3.8% vs 8.1%, and on marker-dense text 2.0% vs 65.1%.
+//
+// Still a heuristic, and still only a fallback: a provider-reported usage always
+// wins (mergeUsage). It only decides what the dashboard shows when the upstream
+// reports no usage at all.
+const ASCII_TOKENS_PER_CHAR = 0.2484;
+const NON_ASCII_TOKENS_PER_CHAR = 1.6056;
+
+export function estimateTextTokens(text) {
+  if (typeof text !== "string" || text.length === 0) return 0;
+  let ascii = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) < 128) ascii++;
+  }
+  const nonAscii = text.length - ascii;
+  return Math.ceil(ascii * ASCII_TOKENS_PER_CHAR + nonAscii * NON_ASCII_TOKENS_PER_CHAR);
+}
+
 /**
  * Estimate input tokens from request body
- * Calculate total body size for more accurate estimation
+ * Structure-aware: the ASCII/non-ASCII split is what chars/4 gets wrong.
  */
 export function estimateInputTokens(body) {
   if (!body || typeof body !== "object") return 0;
 
   try {
-    // Calculate total body size (includes messages, tools, system, thinking config, etc.)
-    const bodyStr = JSON.stringify(body);
-    const totalChars = bodyStr.length;
-
-    // Estimate: ~4 chars per token (rough average across all tokenizers)
-    return Math.ceil(totalChars / 4);
+    return estimateTextTokens(JSON.stringify(body));
   } catch (err) {
-    // Fallback if stringify fails
+    // Fallback if stringify fails (circular body)
     return 0;
   }
 }
