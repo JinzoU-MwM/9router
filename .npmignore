@@ -26,6 +26,11 @@ next.config.mjs
 tsconfig.json
 
 # Build artifacts that shouldn't be published
-.next/cache/
-.next/standalone/data/
+.next/
+.next-cli-build/
+.next-*/
+logs/
+tests/
+*.tgz
+.local-9router-data/
 
