@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -53,6 +53,11 @@ export default function ProviderDetailPage() {
   const [showBulkImportGrokCli, setShowBulkImportGrokCli] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showEditNodeModal, setShowEditNodeModal] = useState(false);
+  // A bansos pool can hold thousands of keys; rendering every row freezes the
+  // tab long before the server notices. Window the list and let the operator
+  // search it.
+  const [connSearch, setConnSearch] = useState("");
+  const [connLimit, setConnLimit] = useState(50);
   const [showBulkProxyModal, setShowBulkProxyModal] = useState(false);
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [modelAliases, setModelAliases] = useState({});
@@ -1023,10 +1028,58 @@ export default function ProviderDetailPage() {
 
   const isSelected = (connectionId) => selectedConnectionIds.includes(connectionId);
 
+  const connIndexById = useMemo(() => {
+    const m = new Map();
+    connections.forEach((c, i) => m.set(c.id, i));
+    return m;
+  }, [connections]);
+
+  const filteredConnections = useMemo(() => {
+    const q = connSearch.trim().toLowerCase();
+    if (!q) return connections;
+    return connections.filter((c) =>
+      [c.name, c.email, c.providerSpecificData?.baseUrl, c.providerSpecificData?.prefix]
+        .some((v) => String(v || "").toLowerCase().includes(q))
+    );
+  }, [connections, connSearch]);
+
+  const visibleConnections = useMemo(
+    () => filteredConnections.slice(0, connLimit),
+    [filteredConnections, connLimit]
+  );
+
   const connectionsList = (
-    <div className="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
-      {connections
-        .map((conn, index) => (
+    <div className="flex min-w-0 flex-col gap-2">
+      {connections.length > 8 && (
+        <div className="flex items-center gap-2">
+          <input
+            type="search"
+            value={connSearch}
+            onChange={(e) => { setConnSearch(e.target.value); setConnLimit(50); }}
+            placeholder="filter by name / base URL"
+            className="h-8 flex-1 rounded-[10px] border border-black/[0.06] bg-transparent px-3 text-xs dark:border-white/[0.08]"
+          />
+          <span className="whitespace-nowrap text-xs opacity-60">
+            {visibleConnections.length}/{filteredConnections.length}
+            {filteredConnections.length !== connections.length ? ` (${connections.length} total)` : ""}
+          </span>
+          {filteredConnections.length > connLimit && (
+            <Button size="sm" variant="secondary" onClick={() => setConnLimit((l) => l + 200)}>
+              +200
+            </Button>
+          )}
+          {filteredConnections.length > connLimit && (
+            <Button size="sm" variant="ghost" onClick={() => setConnLimit(filteredConnections.length)}>
+              All
+            </Button>
+          )}
+        </div>
+      )}
+      <div className="flex min-w-0 flex-col divide-y divide-black/[0.03] dark:divide-white/[0.03] max-h-[500px] overflow-y-auto pr-1">
+      {visibleConnections
+        .map((conn) => {
+          const index = connIndexById.get(conn.id) ?? 0;
+          return (
           <div key={conn.id} className="flex min-w-0 items-stretch">
             <div className="flex shrink-0 items-center pl-1 sm:pl-2">
               <input
@@ -1078,7 +1131,9 @@ export default function ProviderDetailPage() {
               />
             </div>
           </div>
-        ))}
+          );
+        })}
+      </div>
     </div>
   );
 
