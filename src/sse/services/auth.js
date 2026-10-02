@@ -7,6 +7,7 @@ import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLock
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache } from "./antigravityQuota.js";
+import { purgeExhaustedConnection } from "./bansosPurge.js";
 import * as log from "../utils/logger.js";
 
 // Mutex to prevent race conditions during account selection
@@ -265,6 +266,12 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
     ({ shouldFallback, cooldownMs, newBackoffLevel, scope: lockScope } = checkFallbackError(status, errorText, backoffLevel));
   }
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
+
+  // Node-level auto-purge: when the operator switched it on for this node, an
+  // exhausted credential is deleted instead of being re-tried forever. Returns
+  // false for every other node, so built-in/paid providers are untouched.
+  const purge = await purgeExhaustedConnection({ connectionId, provider, status, errorText, model });
+  if (purge.purged) return { shouldFallback: true, cooldownMs: 0 };
 
   const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
   const lockUpdate = buildModelLockUpdate(lockScope === "account" ? null : model, cooldownMs);
