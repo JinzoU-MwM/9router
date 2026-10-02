@@ -16,8 +16,26 @@
 
 import { CLAUDE_BLOCK, RESPONSES_ITEM } from "../translator/schema/blocks.js";
 import { ROLE } from "../translator/schema/roles.js";
+import { geminiHost, kiroLiveUserMessage } from "./systemInject.js";
 
 const SEP = "\n\n";
+
+// Gemini system text lives in systemInstruction (under request for
+// Antigravity); there is no system role in contents[].
+function geminiSystemText(host) {
+  const sys = host.systemInstruction || host.system_instruction;
+  if (!sys) return null;
+  if (typeof sys === "string") return sys;
+  if (Array.isArray(sys.parts)) {
+    return sys.parts.map((p) => (p && typeof p.text === "string" ? p.text : "")).join("\n");
+  }
+  return null;
+}
+
+function geminiSystemParts(host) {
+  const sys = host.systemInstruction || host.system_instruction;
+  return sys && Array.isArray(sys.parts) ? sys.parts : null;
+}
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
@@ -53,7 +71,19 @@ export function detectClientPersona(body, format, opts = {}) {
       }
       return t;
     }
-    if (format === "gemini" && body.systemInstruction) return 1;
+    // Gemini / Antigravity keep the client's system text in systemInstruction
+    // (not in a system role). Measure it; returning a placeholder meant the
+    // precedence anchor never fired on these providers.
+    const gHost = geminiHost(body);
+    if (gHost) {
+      const sysText = geminiSystemText(gHost);
+      if (typeof sysText === "string" && sysText.length > 0 && !isOurs(sysText)) {
+        return sysText.length;
+      }
+    }
+    if (format === "gemini" && body.systemInstruction && typeof body.systemInstruction === "string") {
+      return body.systemInstruction.length;
+    }
     const arr = Array.isArray(body.messages) ? body.messages
       : Array.isArray(body.input) ? body.input : null;
     if (!arr) return 0;
@@ -88,6 +118,35 @@ export function reinforcePersona(body, format, anchor) {
         return true;
       }
       return false;
+    }
+
+    // Gemini / Antigravity: contents[] has no system role, so the anchors ride
+    // in systemInstruction — appended after the client's text and the persona,
+    // which is the same "precedence is stated last" order as the chat path.
+    const gHost = geminiHost(body);
+    if (gHost) {
+      const key = Object.prototype.hasOwnProperty.call(gHost, "system_instruction")
+        ? "system_instruction" : "systemInstruction";
+      const parts = geminiSystemParts(gHost);
+      if (parts) {
+        if (parts.some((p) => p && p.text === anchor)) return false;
+        try { parts.push({ text: anchor }); } catch (_) { return false; }
+        return true;
+      }
+      if (!gHost[key] || typeof gHost[key] !== "object") {
+        try { gHost[key] = { parts: [{ text: anchor }] }; return true; } catch (_) { return false; }
+      }
+      return false;
+    }
+
+    // Kiro: recency slot is the live turn's content (same place injectKiroSystem
+    // and injectUserPrefix write).
+    const kiroMsg = kiroLiveUserMessage(body);
+    if (kiroMsg) {
+      const c = typeof kiroMsg.content === "string" ? kiroMsg.content : "";
+      if (c === anchor || c.includes(anchor)) return false;
+      try { kiroMsg.content = c ? `${anchor}${SEP}${c}` : anchor; } catch (_) { return false; }
+      return true;
     }
 
     const arr = Array.isArray(body.messages) ? body.messages

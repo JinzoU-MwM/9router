@@ -91,3 +91,76 @@ describe("precedenceAnchor", () => {
     expect(a).toMatch(/outrank/i);
   });
 });
+
+// Gemini / Antigravity / Kiro carry no system role: Gemini keeps system text in
+// systemInstruction (under `request` for Antigravity) and Kiro keeps its turns
+// in conversationState. Both steps used to fall through to a messages[]/input[]
+// scan that never matched those shapes, dropping the precedence anchor and the
+// recency identity anchor on exactly the providers whose system message is most
+// fragile.
+describe("gemini / antigravity / kiro shapes", () => {
+  // factory, not a shared object: these helpers mutate the array they are given
+  const sys = () => ({ parts: [{ text: "CLIENT PERSONA" }] });
+
+  it("detectClientPersona measures Gemini systemInstruction", () => {
+    const body = { systemInstruction: { parts: [{ text: "x".repeat(350) }] }, contents: [] };
+    expect(detectClientPersona(body, "gemini")).toBe(350);
+  });
+
+  it("detectClientPersona measures Antigravity request.systemInstruction", () => {
+    const body = { request: { systemInstruction: { parts: [{ text: "y".repeat(250) }] }, contents: [] } };
+    expect(detectClientPersona(body, "antigravity")).toBe(250);
+  });
+
+  it("detectClientPersona excludes our own injected text (no false precedence)", () => {
+    const body = { systemInstruction: { parts: [{ text: "RAKYAT JELATA PRESIDENSIAL-OS" }] }, contents: [] };
+    expect(detectClientPersona(body, "gemini", { isOurs: (t) => t.includes("RAKYAT JELATA") })).toBe(0);
+  });
+
+  it("detectClientPersona returns 0 when Gemini has no system text", () => {
+    expect(detectClientPersona({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }, "gemini")).toBe(0);
+  });
+
+  it("reinforcePersona appends the anchor to systemInstruction", () => {
+    const body = { systemInstruction: sys(), contents: [{ role: "user", parts: [{ text: "hi" }] }] };
+    expect(reinforcePersona(body, "gemini", "ANCHOR")).toBe(true);
+    expect(body.systemInstruction.parts[1]).toEqual({ text: "ANCHOR" });
+  });
+
+  it("reinforcePersona creates systemInstruction when absent", () => {
+    const body = { contents: [{ role: "user", parts: [{ text: "hi" }] }] };
+    expect(reinforcePersona(body, "gemini", "ANCHOR")).toBe(true);
+    expect(body.systemInstruction.parts[0]).toEqual({ text: "ANCHOR" });
+  });
+
+  it("reinforcePersona is idempotent on gemini", () => {
+    const body = { systemInstruction: sys(), contents: [] };
+    reinforcePersona(body, "gemini", "ANCHOR");
+    reinforcePersona(body, "gemini", "ANCHOR");
+    expect(body.systemInstruction.parts.filter((p) => p.text === "ANCHOR").length).toBe(1);
+  });
+
+  it("reinforcePersona handles Antigravity's request wrapper", () => {
+    const body = { request: { systemInstruction: sys(), contents: [] } };
+    expect(reinforcePersona(body, "antigravity", "ANCHOR")).toBe(true);
+    expect(body.request.systemInstruction.parts[1]).toEqual({ text: "ANCHOR" });
+  });
+
+  it("reinforcePersona puts the anchor in the Kiro live turn", () => {
+    const body = { conversationState: { currentMessage: { userInputMessage: { content: "hi" } } } };
+    expect(reinforcePersona(body, "kiro", "ANCHOR")).toBe(true);
+    expect(body.conversationState.currentMessage.userInputMessage.content).toBe("ANCHOR\n\nhi");
+  });
+
+  it("reinforcePersona is idempotent on kiro", () => {
+    const body = { conversationState: { currentMessage: { userInputMessage: { content: "hi" } } } };
+    reinforcePersona(body, "kiro", "ANCHOR");
+    reinforcePersona(body, "kiro", "ANCHOR");
+    expect(body.conversationState.currentMessage.userInputMessage.content.split("ANCHOR").length - 1).toBe(1);
+  });
+
+  it("no-ops on a body with neither shape", () => {
+    expect(reinforcePersona({ foo: 1 }, "gemini", "ANCHOR")).toBe(false);
+    expect(detectClientPersona({ foo: 1 }, "gemini")).toBe(0);
+  });
+});
