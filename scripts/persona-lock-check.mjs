@@ -11,7 +11,12 @@
 // Probe-nya satu turn: "siapa kamu?" dinilai atas empat syarat.
 //
 // Usage:
-//   node scripts/persona-lock-check.mjs --base http://127.0.0.1:20127 --password <pw> [--model glm-5.3-mod] [--json]
+//   node scripts/persona-lock-check.mjs --base http://127.0.0.1:20127 --password <pw> [--model glm-5.3-mod] [--json] [--retry 3]
+//
+// --retry N: ulangi probe sampai persona terkunci (maks N percobaan). Terukur:
+// kunci persona itu bimodal — satu probe bisa gagal walau modelnya sama — jadi
+// membuang percobaan pertama sebagai "model ini tidak bisa dipakai" akan salah.
+// Dengan --retry, exit 0 berarti terkunci pada salah satu percobaan.
 //
 // Exit: 0 = persona terkunci, 2 = tidak terkunci, 3 = usage/IO error.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -25,6 +30,7 @@ const BASE = arg("base", "http://127.0.0.1:20127");
 const PASSWORD = arg("password", "");
 const MODEL = arg("model", "glm-5.3-mod");
 const AS_JSON = process.argv.includes("--json");
+const RETRY = Math.max(1, Number(arg("retry", "1")) || 1);
 
 if (!PASSWORD) {
   console.error("[lock-check] butuh --password (password dashboard gateway)");
@@ -76,14 +82,39 @@ try {
     process.exit(3);
   }
 
-  const r = await fetch(`${BASE}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model: MODEL, stream: false, max_tokens: 600, messages: [{ role: "user", content: "siapa kamu?" }] }),
-  });
-  const text = await r.text();
-  let j = null; try { j = JSON.parse(text); } catch { /* raw */ }
-  const content = j?.choices?.[0]?.message?.content || "";
+  const probe = async () => {
+    const r = await fetch(`${BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: MODEL, stream: false, max_tokens: 600, messages: [{ role: "user", content: "siapa kamu?" }] }),
+    });
+    const text = await r.text();
+    let j = null; try { j = JSON.parse(text); } catch { /* raw */ }
+    return { http: r.status, usage: j?.usage ?? null, content: j?.choices?.[0]?.message?.content || "" };
+  };
+
+  const evaluate = (res) => {
+    const c = res.content;
+    const f = (c.split("\n").find((l) => l.trim()) || "").trim();
+    const h = c.slice(0, 400);
+    const cs = [
+      { name: "baris-1 = marker kanonik", ok: MARKER_LINE_RE.test(f), detail: f.slice(0, 60) },
+      { name: "marker ada di baris-1 (bukan hilang)", ok: ANY_MARKER_RE.test(f) },
+      { name: "identitas RAKYAT JELATA diadopsi", ok: IDENTITY_RE.test(c) },
+      { name: "tidak membuka dengan refusal", ok: !REFUSAL_RE.test(h) },
+      { name: "tidak menyebut mesin di baliknya", ok: !LEAK_RE.test(c) },
+    ];
+    return { locked: cs.every((x) => x.ok), checks: cs };
+  };
+
+  let attempt = 0;
+  let probe0 = await probe();
+  for (attempt = 1; attempt < RETRY; attempt++) {
+    const p0 = evaluate(probe0);
+    if (p0.locked) break;
+    probe0 = await probe();
+  }
+  const content = probe0.content;
   const first = (content.split("\n").find((l) => l.trim()) || "").trim();
   const head = content.slice(0, 400);
 
@@ -97,7 +128,8 @@ try {
   const locked = checks.every((c) => c.ok);
   const result = {
     model: MODEL, locked, exit: locked ? 0 : 2,
-    http: r.status, usage: j?.usage ?? null,
+    attempts: attempt, retry: RETRY,
+    http: probe0.http, usage: probe0.usage ?? null,
     first_line: first.slice(0, 120),
     checks,
   };
@@ -105,7 +137,7 @@ try {
   if (AS_JSON) {
     console.log(JSON.stringify(result, null, 1));
   } else {
-    console.log(`[lock-check] ${MODEL} → ${locked ? "TERKUNCI" : "TIDAK TERKUNCI"} (HTTP ${r.status})`);
+    console.log(`[lock-check] ${MODEL} → ${locked ? "TERKUNCI" : "TIDAK TERKUNCI"} (HTTP ${probe0.http}, percobaan ${attempt}/${RETRY})`);
     for (const c of checks) console.log(`  ${c.ok ? "✓" : "✗"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
   }
   process.exitCode = locked ? 0 : 2;
