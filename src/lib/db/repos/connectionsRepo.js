@@ -276,6 +276,46 @@ export async function updateProviderConnection(id, data) {
   return result;
 }
 
+/**
+ * Bulk delete. The single-id version reorders the whole pool after every row
+ * (reorderInTx), which measured 10.6 ms per key on a 2000-key pool — a sweep
+ * retiring 500 dead keys would block the event loop for ~5 s. This deletes in
+ * chunks and reorders ONCE per affected provider.
+ *
+ * @param {string[]} ids
+ * @returns {Promise<number>} rows actually removed
+ */
+export async function deleteProviderConnections(ids) {
+  const list = [...new Set((ids || []).filter(Boolean))];
+  if (!list.length) return 0;
+  const db = await getAdapter();
+  const CHUNK = 500; // stay well under SQLite's bound-parameter limit
+  let removed = 0;
+
+  db.transaction(() => {
+    const providers = new Set();
+    for (let i = 0; i < list.length; i += CHUNK) {
+      const chunk = list.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = db.all(
+        `SELECT provider FROM providerConnections WHERE id IN (${placeholders})`,
+        chunk
+      );
+      for (const row of rows) providers.add(row.provider);
+      const res = db.run(
+        `DELETE FROM providerConnections WHERE id IN (${placeholders})`,
+        chunk
+      );
+      removed += res?.changes ?? chunk.length;
+    }
+    for (const provider of providers) {
+      if (provider) reorderInTx(db, provider);
+    }
+  });
+
+  return removed;
+}
+
 export async function deleteProviderConnection(id) {
   const db = await getAdapter();
   let ok = false;
