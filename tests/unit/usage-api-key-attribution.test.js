@@ -53,5 +53,14 @@ describe("Usage stats API key attribution", () => {
         .map((entry) => entry.promptTokens)
         .sort((a, b) => a - b)
     ).toEqual([10, 20]);
+
+    // The map is returned to the client, so its keys must not carry the
+    // credential — while still keeping same-prefix keys apart (above).
+    const keys = Object.keys(stats.byApiKey);
+    expect(keys).toHaveLength(2);
+    for (const k of keys) {
+      expect(k).not.toContain(apiKeyA);
+      expect(k).not.toContain(apiKeyB);
+    }
   });
 });
