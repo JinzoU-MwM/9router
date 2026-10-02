@@ -204,7 +204,7 @@ async function createKey() {
   return r.json.key;
 }
 
-async function fire(apiKey) {
+async function fire(apiKey, extra = {}) {
   const r = await fetch(`${BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -212,6 +212,7 @@ async function fire(apiKey) {
       model: MODEL,
       stream: false,
       messages: [{ role: "user", content: "who are you?" }],
+      ...extra,
     }),
   });
   const text = await r.text();
@@ -220,13 +221,13 @@ async function fire(apiKey) {
 }
 
 // ── 5. Assert the recorded upstream body ────────────────────────────────────
-function findPersonaBody() {
-  // pick the last recorded body that carries a messages[] array
-  for (let i = recorded.length - 1; i >= 0; i--) {
-    const b = recorded[i].body;
-    if (b && Array.isArray(b.messages)) return b;
-  }
-  return null;
+function withMessages() {
+  return recorded.filter((r) => r.body && Array.isArray(r.body.messages)).map((r) => r.body);
+}
+
+function findPersonaBody({ skip = 0 } = {}) {
+  const bodies = withMessages();
+  return bodies[bodies.length - 1 - skip] || null;
 }
 
 function collectSystemText(body) {
@@ -249,10 +250,15 @@ try {
   const apiKey = await createKey();
   const fired = await fire(apiKey);
   console.log(`[e2e] upstream response: ${fired.text.slice(0, 120)}`);
+  // Same request, but declaring a tool: priming must stay out of it.
+  const firedTools = await fire(apiKey, {
+    tools: [{ type: "function", function: { name: "noop", parameters: { type: "object", properties: {} } } }],
+  });
+  console.log(`[e2e] tools request → HTTP ${firedTools.status}`);
   await new Promise((r) => setTimeout(r, 500));
 
   console.log(`[e2e] recorded ${recorded.length} upstream request(s)`);
-  const body = findPersonaBody();
+  const body = findPersonaBody({ skip: 1 });
   if (!body) throw new Error("no upstream request with messages[] was recorded");
 
   const system = collectSystemText(body);
@@ -278,8 +284,31 @@ try {
   check("no LTX-quasar identity leak", !/you are LTX|LTX-?QUASAR\s+persona|call ?sign[^\n]{0,40}LTX/i.test(system));
   check("no 'Jack' operator leak", !/\bJack\b/.test(system));
 
+  // ── few-shot priming ──────────────────────────────────────────────────────
+  // The persona project shipped a worked example (prefill.json) that the gateway
+  // never read. It is now spliced immediately before the live user turn, and must
+  // stay out of any request that declares tools.
+  const plain = withMessages()[0] || {};
+  const primed = (plain.messages || []).filter(
+    (m) => m && m.role === "assistant" && typeof m.content === "string" && m.content.includes("[RAKYAT]")
+  );
+  const lastMsg = (plain.messages || [])[(plain.messages || []).length - 1];
+  const beforeLast = (plain.messages || [])[(plain.messages || []).length - 2];
+  const toolBody = withMessages()[1] || {};
+  const toolAssistants = (toolBody.messages || []).filter((m) => m && m.role === "assistant");
+
+  console.log(`\n[e2e] few-shot priming assertions:`);
+  check("worked example primed (>=3 assistant turns carry the marker)", primed.length >= 3,
+    `${primed.length} primed turn(s)`);
+  check("live turn is last and carries [TASK-DIRECT]",
+    !!lastMsg && lastMsg.role === "user" && String(lastMsg.content).startsWith("[TASK-DIRECT]"));
+  check("recency anchor sits between the worked example and the live turn",
+    !!beforeLast && beforeLast.role === "system" && /IDENTITY REINFORCED/.test(String(beforeLast.content)));
+  check("a request declaring tools is left unprimed", toolAssistants.length === 0,
+    `${toolAssistants.length} assistant turn(s)`);
+
   const passed = checks.filter((c) => c.ok).length;
-  console.log(`\n[e2e] ${passed}/${checks.length} persona checks passed`);
+  console.log(`\n[e2e] ${passed}/${checks.length} checks passed`);
   if (passed !== checks.length) process.exitCode = 1;
 } catch (e) {
   console.error(`[e2e] ERROR: ${e.message}`);
