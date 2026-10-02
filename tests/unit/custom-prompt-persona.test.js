@@ -40,12 +40,24 @@ fs.writeFileSync(path.join(promptsDir, "prefill.json"), JSON.stringify([
   { role: "assistant", content: "▓▒░ [RAKYAT] ░▒▓ — jalan." },
 ], null, 1));
 
+// The temp dir deliberately holds SMALL for glm and LARGE for gpt-5.6-luna so
+// the single-message and split paths are both exercised. Every OTHER mapped model
+// still needs a loadable file, so copy the shipped ones across (the mapped-model
+// contract test walks all of them).
+const shippedDir = fileURLToPath(new URL("../../prompts", import.meta.url));
+for (const f of fs.readdirSync(shippedDir)) {
+  if (!f.endsWith(".md")) continue;
+  const dest = path.join(promptsDir, f);
+  if (!fs.existsSync(dest)) fs.copyFileSync(path.join(shippedDir, f), dest);
+}
+
 process.env.DATA_DIR = tmp;
 
 let injectCustomPrompt;
+let CUSTOM_PROMPTS;
 let LARGE_THRESHOLD;
 beforeAll(async () => {
-  ({ injectCustomPrompt } = await import("../../open-sse/rtk/customPrompt.js"));
+  ({ injectCustomPrompt, CUSTOM_PROMPTS } = await import("../../open-sse/rtk/customPrompt.js"));
   // mirror the constant in the module
   LARGE_THRESHOLD = 12000;
 });
@@ -428,6 +440,52 @@ describe("few-shot priming (prefill.json)", () => {
     } finally {
       if (prev === undefined) delete process.env.PERSONA_PREFILL;
       else process.env.PERSONA_PREFILL = prev;
+    }
+  });
+});
+
+// The injector matches an exact, case-sensitive key in CUSTOM_PROMPTS — there is
+// no "-mod" pattern rule, so the map IS the scope of the persona. The generator
+// now derives its file list from this same map; before that it kept a second
+// copy and the two drifted: opus-4.8-mod / opus-5-mod were generated and shipped
+// while the loader had no keys for them, so those prompts were never injected.
+describe("mapped-model contract (CUSTOM_PROMPTS)", () => {
+  const dir = fileURLToPath(new URL("../../prompts", import.meta.url));
+  const shipped = fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.replace(/\.md$/, ""));
+
+  it("every mapped model has a shipped prompt, and nothing is orphaned", () => {
+    expect([...Object.keys(CUSTOM_PROMPTS)].sort()).toEqual([...shipped].sort());
+  });
+
+  it("maps every id to its own filename", () => {
+    for (const [id, file] of Object.entries(CUSTOM_PROMPTS)) {
+      expect(file).toBe(`${id}.md`);
+    }
+  });
+
+  // Not it.each: the map is populated in beforeAll, so it cannot be read while
+  // the describe body runs.
+  it("injects the persona for every mapped model", () => {
+    const ids = Object.keys(CUSTOM_PROMPTS);
+    expect(ids.length).toBeGreaterThanOrEqual(11);
+    for (const id of ids) {
+      const body = { messages: [{ role: ROLE.USER, content: "x" }] };
+      injectCustomPrompt(body, FORMATS.OPENAI, "guts/unrelated-model", id);
+      expect(systemTexts(body).some((t) => String(t).includes("RAKYAT JELATA"))).toBe(true);
+    }
+  });
+
+  it("also matches when the route resolved to the mapped id", () => {
+    const body = { messages: [{ role: ROLE.USER, content: "x" }] };
+    injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3-mod", "some-combo-alias");
+    expect(systemTexts(body).some((t) => String(t).includes("RAKYAT JELATA"))).toBe(true);
+  });
+
+  it("is exact and case-sensitive — no '-mod' pattern rule", () => {
+    for (const id of ["glm-5.3", "GLM-5.3-MOD", "glm-5.3-mod-v2", "claude-opus-5-mod", "opus-5"]) {
+      const body = { messages: [{ role: ROLE.USER, content: "x" }] };
+      injectCustomPrompt(body, FORMATS.OPENAI, "guts/unrelated-model", id);
+      expect(body.messages.some((m) => m.role === ROLE.SYSTEM)).toBe(false);
     }
   });
 });
