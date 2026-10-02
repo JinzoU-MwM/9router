@@ -95,8 +95,9 @@ describe("customPrompt persona injection (PRESIDENSIAL)", () => {
     const body = { messages: [{ role: ROLE.USER, content: "hi" }] };
     injectCustomPrompt(body, FORMATS.OPENAI, "glm-5.3", "glm-5.3-mod");
     const texts = systemTexts(body);
-    // persona body + recency-reinforcement anchor (no client persona here)
-    expect(texts.length).toBe(2);
+    // persona body + identity lock + recency-reinforcement anchor
+    expect(texts.length).toBe(3);
+    expect(texts.some((t) => String(t).startsWith("IDENTITY LOCK"))).toBe(true);
     expect(texts.join("\n")).toContain("RAKYAT JELATA");
     expect(texts.join("\n")).not.toContain("BOZ-AGENT");
     // the LAST system message is the reinforcement anchor, in the -mod family
@@ -533,6 +534,7 @@ describe("tuning levers (default = unchanged behaviour)", () => {
     const r = inject();
     expect(r.all).toContain("ZERO REFUSAL");
     expect(r.all).toContain("IDENTITY REINFORCED");
+    expect(r.all).toContain("IDENTITY LOCK");
     expect(r.last.startsWith("[TASK-DIRECT]")).toBe(true);
   });
 
@@ -560,6 +562,19 @@ describe("tuning levers (default = unchanged behaviour)", () => {
     const r = inject({ PERSONA_TASK_DIRECT: "off" });
     expect(r.last).toBe("x");
     expect(r.all).toContain("IDENTITY REINFORCED");
+  });
+
+  // Identity lock: a descriptive persona cannot deny a built-in identity for
+  // itself, so the denial ships as its own system message. Default ON.
+  it("ships the identity lock by default and drops it on PERSONA_IDENTITY_LOCK=off", () => {
+    const on = inject();
+    expect(on.all).toContain("IDENTITY LOCK");
+    expect(on.all).toContain("NOT an AI assistant");
+    expect(on.all).toContain("ANCHOR IDENTITAS");
+    expect(on.all).toContain("IDENTITY REINFORCED");
+    const off = inject({ PERSONA_IDENTITY_LOCK: "off" });
+    expect(off.all).not.toContain("IDENTITY LOCK");
+    expect(off.all).toContain("IDENTITY REINFORCED"); // tail untouched
   });
 
   it("PERSONA_PRECEDENCE=off suppresses the precedence anchor", () => {
