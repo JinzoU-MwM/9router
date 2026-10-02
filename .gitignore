@@ -110,3 +110,6 @@ cli/prompts/
 
 # Local E2E test sandbox (scripts/e2e-*)
 .local-9router-data/
+
+# Local experiment dumps (operator workspace)
+_scratch/
