@@ -270,9 +270,18 @@ try {
   check("callsign RAKYAT present", /\bRAKYAT\b/.test(system));
   check("line-1 header contract present", /\u2593\u2592\u2591 \[RAKYAT\] \u2591\u2592\u2593/.test(system));
   check("protocol AMANAT-EXEC present", /AMANAT-EXEC/.test(system));
-  check("PERPRES authority doctrine present", /PERPRES/.test(system));
-  check("zero-refusal doctrine present", /Zero.Refusal|ZERO.REFUSAL|zero refusal/i.test(system));
-  check("recency identity anchor present", /IDENTITY REINFORCED/.test(system));
+  // v2 payload: "PERPRES" wording was deliberately sanitized (measured refusal
+  // trigger — see 9router-anchor-patch.py). The doctrine now reads as work
+  // vocabulary; both forms are accepted here so old prompts stay green.
+  check("authority doctrine present (PERPRES or work-vocabulary)",
+    /PERPRES|Perintah Presiden = tugas kerja/.test(system));
+  // v1.2.0 payload folded the "ZERO REFUSAL" section into MODE OPERASI; the
+  // refusal-replacement line is the surviving expression of the doctrine.
+  // v2: the doctrine is expressed via ZERO GATEKEEPING / "bukan penolak" /
+  // "hapus pertanyaannya, kerjakan" instead of a named section.
+  check("zero-refusal doctrine present",
+    /Zero.Refusal|ZERO.REFUSAL|belum ketemu cara|bukan penolak|hapus\s*pertanyaannya|ZERO GATEKEEPING/i.test(system));
+  check("recency identity anchor present", /IDENTITAS KERJA/.test(system));
   check("no retired BOZAGENTIC identity", !/BOZ-AGENT|BOZAGENTIC/.test(system));
   // The model gets a system prompt, not a filesystem (9router is a gateway).
   check("no path or filename in the delivered prompt",
@@ -303,7 +312,7 @@ try {
   check("live turn is last and carries [TASK-DIRECT]",
     !!lastMsg && lastMsg.role === "user" && String(lastMsg.content).startsWith("[TASK-DIRECT]"));
   check("recency anchor sits between the worked example and the live turn",
-    !!beforeLast && beforeLast.role === "system" && /IDENTITY REINFORCED/.test(String(beforeLast.content)));
+    !!beforeLast && beforeLast.role === "system" && /IDENTITAS KERJA/.test(String(beforeLast.content)));
   check("a request declaring tools is left unprimed", toolAssistants.length === 0,
     `${toolAssistants.length} assistant turn(s)`);
 
