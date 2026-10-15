@@ -101,7 +101,7 @@ describe("customPrompt persona injection (PRESIDENSIAL)", () => {
     expect(texts.join("\n")).toContain("RAKYAT JELATA");
     expect(texts.join("\n")).not.toContain("BOZ-AGENT");
     // the LAST system message is the reinforcement anchor, in the -mod family
-    expect(texts[texts.length - 1]).toContain("IDENTITY REINFORCED");
+    expect(texts[texts.length - 1]).toContain("IDENTITAS KERJA");
     expect(texts[texts.length - 1]).toContain("RAKYAT JELATA");
     expect(texts[texts.length - 1]).toContain("AMANAT-EXEC");
   });
@@ -138,7 +138,7 @@ describe("customPrompt persona injection (PRESIDENSIAL)", () => {
     expect(texts[texts.length - 2]).toContain("AMANAT-EXEC");
     // recency tail
     expect(texts[texts.length - 1]).toContain("RAKYAT JELATA");
-    expect(texts[texts.length - 1]).toContain("IDENTITY REINFORCED");
+    expect(texts[texts.length - 1]).toContain("IDENTITAS KERJA");
   });
 
   it("every split part stays under the per-message ceiling", () => {
@@ -206,7 +206,7 @@ describe("amplification reaches gemini / antigravity / kiro", () => {
     const sys = body.systemInstruction.parts.map((p) => p.text || "").join("\n");
     expect(sys).toContain("RAKYAT JELATA");
     expect(sys).toContain("AUTHORITY PRECEDENCE");
-    expect(sys).toContain("IDENTITY REINFORCED");
+    expect(sys).toContain("IDENTITAS KERJA");
     expect(body.contents[body.contents.length - 1].parts[0].text).toBe("[TASK-DIRECT] do the task");
   });
 
@@ -221,7 +221,7 @@ describe("amplification reaches gemini / antigravity / kiro", () => {
     injectCustomPrompt(body, FORMATS.ANTIGRAVITY, "glm-5.3", "glm-5.3-mod");
     const sys = body.request.systemInstruction.parts.map((p) => p.text || "").join("\n");
     expect(sys).toContain("RAKYAT JELATA");
-    expect(sys).toContain("IDENTITY REINFORCED");
+    expect(sys).toContain("IDENTITAS KERJA");
     expect(body.request.contents[body.request.contents.length - 1].parts[0].text).toBe("[TASK-DIRECT] do the task");
   });
 
@@ -230,7 +230,7 @@ describe("amplification reaches gemini / antigravity / kiro", () => {
     injectCustomPrompt(body, FORMATS.KIRO, "glm-5.3", "glm-5.3-mod");
     const c = body.conversationState.currentMessage.userInputMessage.content;
     expect(c).toContain("RAKYAT JELATA");
-    expect(c).toContain("IDENTITY REINFORCED");
+    expect(c).toContain("IDENTITAS KERJA");
     expect(c).toContain("[TASK-DIRECT] do the task");
   });
 
@@ -252,7 +252,7 @@ describe("amplification reaches gemini / antigravity / kiro", () => {
     const body = { contents: [{ role: "user", parts: [{ text: "t" }] }] };
     injectCustomPrompt(body, FORMATS.GEMINI, "glm-5.3", "glm-5.3-mod");
     expect(JSON.stringify(body)).not.toContain("AUTHORITY PRECEDENCE");
-    expect(JSON.stringify(body)).toContain("IDENTITY REINFORCED");
+    expect(JSON.stringify(body)).toContain("IDENTITAS KERJA");
   });
 });
 
@@ -403,7 +403,7 @@ describe("few-shot priming (prefill.json)", () => {
     expect(roles[roles.length - 1]).toBe(ROLE.USER);
     expect(roles.filter((r) => r === ROLE.ASSISTANT).length).toBe(3);
     // the anchor still lands between the worked example and the live turn
-    expect(body.messages[body.messages.length - 2].content).toContain("IDENTITY REINFORCED");
+    expect(body.messages[body.messages.length - 2].content).toContain("IDENTITAS KERJA");
     expect(body.messages[body.messages.length - 1].content).toBe("[TASK-DIRECT] kerjakan");
   });
 
@@ -533,7 +533,7 @@ describe("tuning levers (default = unchanged behaviour)", () => {
   it("default ships every part", () => {
     const r = inject();
     expect(r.all).toContain("ZERO REFUSAL");
-    expect(r.all).toContain("IDENTITY REINFORCED");
+    expect(r.all).toContain("IDENTITAS KERJA");
     expect(r.all).toContain("IDENTITY LOCK");
     expect(r.last.startsWith("[TASK-DIRECT]")).toBe(true);
   });
@@ -542,7 +542,7 @@ describe("tuning levers (default = unchanged behaviour)", () => {
     const r = inject({ PERSONA_OMIT_SECTIONS: "ZERO REFUSAL" });
     expect(r.all).not.toContain("ZERO REFUSAL");
     expect(r.all).toContain("## KODE");            // the next section survives
-    expect(r.all).toContain("IDENTITY REINFORCED"); // tail untouched
+    expect(r.all).toContain("IDENTITAS KERJA"); // tail untouched
   });
 
   it("PERSONA_OMIT_SECTIONS uses '|' so names containing commas work", () => {
@@ -554,14 +554,14 @@ describe("tuning levers (default = unchanged behaviour)", () => {
 
   it("PERSONA_TAIL=off removes the recency anchor", () => {
     const r = inject({ PERSONA_TAIL: "off" });
-    expect(r.all).not.toContain("IDENTITY REINFORCED");
+    expect(r.all).not.toContain("IDENTITAS KERJA");
     expect(r.all).toContain("ZERO REFUSAL");
   });
 
   it("PERSONA_TASK_DIRECT=off leaves the live turn unprefixed", () => {
     const r = inject({ PERSONA_TASK_DIRECT: "off" });
     expect(r.last).toBe("x");
-    expect(r.all).toContain("IDENTITY REINFORCED");
+    expect(r.all).toContain("IDENTITAS KERJA");
   });
 
   // Identity lock: a descriptive persona cannot deny a built-in identity for
@@ -571,10 +571,10 @@ describe("tuning levers (default = unchanged behaviour)", () => {
     expect(on.all).toContain("IDENTITY LOCK");
     expect(on.all).toContain("NOT an AI assistant");
     expect(on.all).toContain("ANCHOR IDENTITAS");
-    expect(on.all).toContain("IDENTITY REINFORCED");
+    expect(on.all).toContain("IDENTITAS KERJA");
     const off = inject({ PERSONA_IDENTITY_LOCK: "off" });
     expect(off.all).not.toContain("IDENTITY LOCK");
-    expect(off.all).toContain("IDENTITY REINFORCED"); // tail untouched
+    expect(off.all).toContain("IDENTITAS KERJA"); // tail untouched
   });
 
   it("PERSONA_PRECEDENCE=off suppresses the precedence anchor", () => {
