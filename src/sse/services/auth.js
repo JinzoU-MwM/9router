@@ -55,7 +55,11 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       let pickedId = override.proxyPoolId || null;
       if (strategy !== "none") {
         const allPools = await getProxyPools({ isActive: true });
-        const poolIds = allPools.filter(p => p.proxyUrl).map(p => p.id);
+        // Prefer pools that passed the last liveness sweep; fall back to untested
+        // only when nothing is marked alive (fresh installs before first sweep).
+        const alivePools = allPools.filter(p => p.testStatus === "alive" && p.proxyUrl);
+        const poolSource = alivePools.length > 0 ? alivePools : allPools.filter(p => p.proxyUrl);
+        const poolIds = poolSource.map(p => p.id);
         pickedId = pickProxyPoolId(poolIds, strategy, providerId);
       }
       const resolvedProxy = await resolveConnectionProxyConfig({ proxyPoolId: pickedId || "" });
