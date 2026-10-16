@@ -1,15 +1,12 @@
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS, getModelKind } from "@/shared/constants/models";
 import {
-  ALIAS_TO_ID,
   AI_PROVIDERS,
-  FREE_PROVIDERS,
   getProviderAlias,
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
 } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
-import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
 import { resolveQoderModels, routableQoderModels } from "open-sse/services/qoderModels.js";
@@ -21,6 +18,7 @@ import { resolveZedModels } from "open-sse/shared/zedAuth.js";
 import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
 import { capabilitiesFromServiceKind, getCapabilitiesForModel, aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { filterModelsForApiKey } from "@/sse/services/auth";
 
 // Qoder shares one live resolver across intl (qoder) and CN (qoder-cn); the
 // credentials carry the provider id so qoderModels picks the right region's
@@ -41,22 +39,6 @@ async function resolveQoderLiveModels(conn, provider) {
   const models = routableQoderModels(result);
   if (!models.length) return null;
   return { models: models.map((m) => ({ id: m.id, name: m.name })) };
-}
-
-// Combo seats use UI aliases; the model registry also has transport aliases.
-// Capability overrides and catalog limits are keyed by provider id.
-const ALIAS_TO_PROVIDER_ID = {
-  ...Object.fromEntries(
-    Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
-  ),
-  ...ALIAS_TO_ID,
-};
-
-function comboSeatCapabilities(seat) {
-  const slash = seat.indexOf("/");
-  if (slash <= 0) return null;
-  const alias = seat.slice(0, slash);
-  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, seat.slice(slash + 1));
 }
 
 // Per-provider live model resolvers. Each receives a connection record and
@@ -165,9 +147,77 @@ const parseOpenAIStyleModels = (data) => {
   return data?.data || data?.models || data?.results || [];
 };
 
+const MODEL_CATALOG_CACHE_TTL_MS = 60_000;
+const MODEL_CATALOG_FAILURE_CACHE_TTL_MS = 10_000;
+const MODEL_CATALOG_FETCH_TIMEOUT_MS = 4_000;
+const modelCatalogCache = new Map();
+
+function modelCatalogCacheKey(connection, catalogType) {
+  return [
+    catalogType,
+    connection?.id || connection?.provider || "unknown",
+    connection?.updatedAt || "",
+    connection?.provider,
+  ].join(":");
+}
+
+function pruneModelCatalogCache() {
+  const now = Date.now();
+  for (const [key, entry] of modelCatalogCache) {
+    if (!entry.promise && entry.expiresAt <= now) modelCatalogCache.delete(key);
+  }
+  while (modelCatalogCache.size > 512) {
+    const oldestKey = modelCatalogCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    modelCatalogCache.delete(oldestKey);
+  }
+}
+
+async function getCachedModelCatalog(connection, catalogType, loader) {
+  const key = modelCatalogCacheKey(connection, catalogType);
+  const now = Date.now();
+  const cached = modelCatalogCache.get(key);
+  if (cached?.promise) return cached.promise;
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  let timeoutId;
+  const promise = Promise.race([
+    Promise.resolve().then(loader),
+    new Promise((resolve) => {
+      timeoutId = setTimeout(() => resolve(null), MODEL_CATALOG_FETCH_TIMEOUT_MS);
+      timeoutId.unref?.();
+    }),
+  ])
+    .then((result) => {
+      const models = Array.isArray(result?.models)
+        ? result.models.filter((model) => typeof model?.id === "string" && model.id.trim())
+        : [];
+      const value = models.length ? { ...result, models } : null;
+      modelCatalogCache.set(key, {
+        value,
+        expiresAt: Date.now() + (value ? MODEL_CATALOG_CACHE_TTL_MS : MODEL_CATALOG_FAILURE_CACHE_TTL_MS),
+      });
+      pruneModelCatalogCache();
+      return value;
+    })
+    .catch(() => {
+      modelCatalogCache.set(key, {
+        value: null,
+        expiresAt: Date.now() + MODEL_CATALOG_FAILURE_CACHE_TTL_MS,
+      });
+      pruneModelCatalogCache();
+      return null;
+    })
+    .finally(() => clearTimeout(timeoutId));
+
+  modelCatalogCache.set(key, { promise, expiresAt: Infinity });
+  pruneModelCatalogCache();
+  return promise;
+}
+
 // Header sent by fetchCompatibleModelIds to detect cross-instance /models fetches
 // and break recursive loops between 9router instances connected to each other.
-const INTERNAL_MODELS_FETCH_HEADER = "x-9r-internal-models-fetch";
+export const INTERNAL_MODELS_FETCH_HEADER = "x-9r-internal-models-fetch";
 
 // LLM kind sentinel — combos/models with no explicit kind default to LLM
 const LLM_KIND = "llm";
@@ -273,47 +323,6 @@ function comboMatchesKinds(combo, kindFilter) {
   return kindFilter.includes(kind);
 }
 
-// Nested combo names are valid seats — the model selector exposes them and
-// chat routing resolves them recursively — but a no-slash seat is otherwise
-// treated as a literal model and publishes the 200k floor. Expand nested
-// names (cycle-guarded) so the published window is the true min across the
-// whole chain.
-function comboSeatLimits(combo, combosByName, visiting = new Set()) {
-  const name = typeof combo?.name === "string" ? combo.name : null;
-  if (name) {
-    if (visiting.has(name)) return { contextWindow: undefined, maxOutput: undefined };
-    visiting.add(name);
-  }
-
-  let contextWindow = Infinity;
-  let maxOutput = Infinity;
-  try {
-    for (const seat of Array.isArray(combo?.models) ? combo.models : []) {
-      if (typeof seat !== "string") continue;
-      const slash = seat.indexOf("/");
-      if (slash <= 0) {
-        const nested = combosByName.get(seat);
-        if (nested) {
-          const nestedLimits = comboSeatLimits(nested, combosByName, visiting);
-          if (Number.isFinite(nestedLimits.contextWindow)) contextWindow = Math.min(contextWindow, nestedLimits.contextWindow);
-          if (Number.isFinite(nestedLimits.maxOutput)) maxOutput = Math.min(maxOutput, nestedLimits.maxOutput);
-          continue;
-        }
-      }
-      const caps = comboSeatCapabilities(seat) || getCapabilitiesForModel(null, seat);
-      if (Number.isFinite(caps?.contextWindow)) contextWindow = Math.min(contextWindow, caps.contextWindow);
-      if (Number.isFinite(caps?.maxOutput)) maxOutput = Math.min(maxOutput, caps.maxOutput);
-    }
-  } finally {
-    if (name) visiting.delete(name);
-  }
-
-  return {
-    contextWindow: Number.isFinite(contextWindow) ? contextWindow : undefined,
-    maxOutput: Number.isFinite(maxOutput) ? maxOutput : undefined,
-  };
-}
-
 /**
  * Build OpenAI-format models list filtered by service kinds.
  * @param {string[]} kindFilter - List of service kinds to include (e.g. ["llm"], ["webSearch","webFetch"]).
@@ -367,21 +376,43 @@ export async function buildModelsList(kindFilter, options = {}) {
     }
   }
 
-  // Include no-auth free providers (e.g. opencode) so their models are exposed in /v1/models
-  for (const [id, provider] of Object.entries(FREE_PROVIDERS || {})) {
-    if (provider?.noAuth && !activeConnectionByProvider.has(id)) {
-      activeConnectionByProvider.set(id, {
-        id: "noauth",
-        provider: id,
-        isActive: true,
-      });
+  // Resolve dynamic provider catalogs concurrently and cache them briefly.
+  // The previous in-loop awaits made /v1/models wait for every provider in
+  // sequence, so one slow/dead account could stall clients for many seconds.
+  const dynamicCatalogs = new Map();
+  await Promise.all(Array.from(activeConnectionByProvider.entries()).map(async ([providerId, conn]) => {
+    if (!providerMatchesKinds(providerId, kindFilter)) return;
+
+    const staticAlias = PROVIDER_ID_TO_ALIAS[providerId] || providerId;
+    const providerModels = PROVIDER_MODELS[staticAlias] || [];
+    const enabledModels = conn?.providerSpecificData?.enabledModels;
+    const hasExplicitEnabledModels = Array.isArray(enabledModels) && enabledModels.length > 0;
+    const isCompatibleProvider =
+      isOpenAICompatibleProvider(providerId) || isAnthropicCompatibleProvider(providerId);
+    const catalog = {};
+    const tasks = [];
+
+    if (isCompatibleProvider && providerModels.length === 0 && !hasExplicitEnabledModels && !skipDynamicFetch) {
+      tasks.push(getCachedModelCatalog(conn, "compatible", async () => {
+        const ids = await fetchCompatibleModelIds(conn);
+        return { models: ids.map((id) => ({ id })) };
+      }).then((result) => {
+        catalog.compatibleModelIds = result?.models?.map((model) => model.id) || [];
+      }));
     }
-  }
+
+    const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
+    if (liveResolver && !hasExplicitEnabledModels) {
+      tasks.push(getCachedModelCatalog(conn, "live", () => liveResolver(conn)).then((result) => {
+        catalog.live = result;
+      }));
+    }
+
+    await Promise.all(tasks);
+    dynamicCatalogs.set(providerId, catalog);
+  }));
 
   const models = [];
-  const combosByName = new Map(
-    combos.filter((c) => typeof c?.name === "string").map((c) => [c.name, c]),
-  );
 
   // Lookup map so aggregateComboCapabilities can recursively resolve nested combos
   const comboByName = Object.fromEntries(combos.map((c) => [c.name, c.models]));
@@ -397,27 +428,23 @@ export async function buildModelsList(kindFilter, options = {}) {
     if (combo.kind === "webSearch" || combo.kind === "webFetch") {
       entry.kind = combo.kind;
     } else {
-      const comboCaps = aggregateComboCapabilities(combo.models, comboByName, comboSeatCapabilities);
+      const comboCaps = aggregateComboCapabilities(combo.models, comboByName);
       if (comboCaps) entry.capabilities = comboCaps;
-      // Any seat can serve the request, so the only window a combo can promise is
-      // its smallest. Combo entries were the only models on this endpoint that
-      // published no limits at all, which leaves a client to guess from the name —
-      // and it guesses high (see the snake_case note on the per-provider path).
-      const { contextWindow, maxOutput } = comboSeatLimits(combo, combosByName);
-      if (Number.isFinite(contextWindow)) entry.context_length = contextWindow;
-      if (Number.isFinite(maxOutput)) entry.max_completion_tokens = maxOutput;
     }
     models.push(entry);
   }
 
   if (connections.length === 0) {
     // DB unavailable -> return static models, filtered by per-model kind
+    const aliasToProviderId = Object.fromEntries(
+      Object.entries(PROVIDER_ID_TO_ALIAS).map(([id, alias]) => [alias, id])
+    );
     for (const [alias, providerModels] of Object.entries(PROVIDER_MODELS)) {
-      const providerId = ALIAS_TO_PROVIDER_ID[alias] || alias;
+      const providerId = aliasToProviderId[alias] || alias;
       if (!providerMatchesKinds(providerId, kindFilter)) continue;
       for (const model of providerModels) {
         if (!kindFilter.includes(modelKind(model))) continue;
-        if (isDisabled(alias, model.id) || isDisabled(providerId, model.id)) continue;
+        if (isDisabled(alias, model.id)) continue;
         models.push({
           id: `${alias}/${model.id}`,
           object: "model",
@@ -478,7 +505,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         : providerModels.map((model) => model.id);
 
       if (isCompatibleProvider && rawModelIds.length === 0 && !skipDynamicFetch) {
-        rawModelIds = await fetchCompatibleModelIds(conn);
+        rawModelIds = dynamicCatalogs.get(providerId)?.compatibleModelIds || [];
       }
 
       // Config-driven live catalog override (e.g. Kiro returns dynamic
@@ -486,23 +513,19 @@ export async function buildModelsList(kindFilter, options = {}) {
       // whatever rawModelIds already holds.
       const liveResolver = LIVE_MODEL_RESOLVERS[providerId];
       if (liveResolver && !hasExplicitEnabledModels) {
-        try {
-          const live = await liveResolver(conn);
-          if (live?.models?.length) {
-            rawModelIds = live.models.map((m) => m.id);
-            liveModelKindById = new Map(
-              live.models
-                .filter((m) => m?.id)
-                .map((m) => [m.id, modelKind(m)])
-            );
-            liveCapabilitiesById = new Map(
-              live.models
-                .filter((m) => m?.id && m.capabilities)
-                .map((m) => [m.id, m.capabilities])
-            );
-          }
-        } catch (err) {
-          console.log(`Live model fetch failed for ${providerId}: ${err?.message || err}`);
+        const live = dynamicCatalogs.get(providerId)?.live;
+        if (live?.models?.length) {
+          rawModelIds = live.models.map((m) => m.id);
+          liveModelKindById = new Map(
+            live.models
+              .filter((m) => m?.id)
+              .map((m) => [m.id, modelKind(m)])
+          );
+          liveCapabilitiesById = new Map(
+            live.models
+              .filter((m) => m?.id && m.capabilities)
+              .map((m) => [m.id, m.capabilities])
+          );
         }
       }
 
@@ -572,7 +595,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         // imageToText custom models stay in the LLM list (vision-capable chat models)
         const allowAsLlm = kind === "imageToText" && kindFilter.includes(LLM_KIND);
         if (!kindFilter.includes(kind) && !allowAsLlm) continue;
-        if (isDisabled(outputAlias, modelId) || isDisabled(staticAlias, modelId) || isDisabled(providerId, modelId)) continue;
+        if (isDisabled(outputAlias, modelId) || isDisabled(staticAlias, modelId)) continue;
 
         const model = {
           id: `${outputAlias}/${modelId}`,
@@ -664,10 +687,8 @@ export async function GET(request) {
   try {
     // Detect cross-instance recursive /models fetch (another 9router fetching our /models)
     const skipDynamicFetch = request?.headers?.get(INTERNAL_MODELS_FETCH_HEADER) === "1";
-    const data = await filterModelsListForKey(
-      await getKeyAccessContext(request),
-      await buildModelsList([LLM_KIND], { skipDynamicFetch })
-    );
+    const all = await buildModelsList([LLM_KIND], { skipDynamicFetch });
+    const data = await filterModelsForApiKey(request, all);
     return Response.json({ object: "list", data }, {
       headers: { "Access-Control-Allow-Origin": "*" },
     });
