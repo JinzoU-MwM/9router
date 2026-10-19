@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { CUSTOM_PROMPTS } from "open-sse/rtk/customPrompt.js";
+import { CUSTOM_PROMPTS, loadCustomPersonas } from "open-sse/rtk/customPrompt.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -44,6 +44,23 @@ function isOn(value) {
   return !["off", "0", "false", "no"].includes(String(value).toLowerCase());
 }
 
+// All persona mappings: built-in + dashboard-added (custom-personas.json).
+function allMappings(dir) {
+  const merged = { ...CUSTOM_PROMPTS };
+  try {
+    const custom = loadCustomPersonas();
+    for (const [k, v] of Object.entries(custom)) {
+      // verify the referenced file actually exists in dir (otherwise the
+      // loader would later no-op on it anyway)
+      try {
+        fs.statSync(path.join(dir, v));
+        merged[k] = v;
+      } catch {}
+    }
+  } catch {}
+  return merged;
+}
+
 export async function GET() {
   try {
     const dir = resolvePromptsDir();
@@ -51,7 +68,7 @@ export async function GET() {
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith(".md")) continue;
       const st = fs.statSync(path.join(dir, f));
-      const models = Object.entries(CUSTOM_PROMPTS)
+      const models = Object.entries(allMappings(dir))
         .filter(([, file]) => file === f)
         .map(([model]) => model);
       // Preview: strip markdown for a compact first-line summary
@@ -68,6 +85,7 @@ export async function GET() {
         bytes: st.size,
         mtimeMs: Math.round(st.mtimeMs),
         models,
+        custom: Object.values(loadCustomPersonas()).includes(f),
         firstLine: firstLine.slice(0, 160),
       });
     }
@@ -99,7 +117,7 @@ export async function GET() {
       // Read-only reflection of the runtime env — the dashboard does not change
       // injection behaviour; env vars remain the single source of control.
       levers[key] = {
-        on: isOn(envVal) && envVal !== undefined ? !["off", "0", "false", "no"].includes(String(envVal).toLowerCase()) : envVal === undefined,
+        on: envVal === undefined ? true : isOn(envVal),
         source: envVal !== undefined && envVal !== "" ? "env" : "default",
       };
     }
@@ -122,7 +140,8 @@ export async function PUT(request) {
     //    an unrelated file into a non-persona prompt by accident).
     if (typeof body.file === "string" && typeof body.content === "string") {
       const safeName = path.basename(body.file); // no traversal (CWE-22)
-      if (!Object.values(CUSTOM_PROMPTS).includes(safeName)) {
+      const mappings = allMappings(dir);
+      if (!Object.values(mappings).includes(safeName)) {
         return NextResponse.json(
           { error: `file is not a mapped persona prompt: ${safeName}` },
           { status: 400 }
@@ -146,6 +165,90 @@ export async function PUT(request) {
       }
       fs.writeFileSync(target, body.content, "utf8");
       return NextResponse.json({ ok: true, file: safeName, bytes: body.content.length });
+    }
+
+    // 1b. Add a new persona mapping: { addPersona: { model, content? , copyFrom? } }
+    //     Creates prompts/<model>.md (or copies a template) and refs it from
+    //     custom-personas.json. Injection picks it up on the next request —
+    //     loadCustomPersonas is mtime-cached, no restart.
+    if (body.addPersona && typeof body.addPersona === "object") {
+      const model = String(body.addPersona.model || "").trim();
+      // model id sanity: no whitespace, no path chars, non-empty
+      if (
+        !model ||
+        /\s/.test(model) ||
+        model !== path.basename(model) ||
+        model.includes("/") || model.includes("\\") || model.includes("..")
+      ) {
+        return NextResponse.json({ error: `invalid model id: ${model}` }, { status: 400 });
+      }
+      const fileName = `${model}.md`;
+      const mappings = allMappings(dir);
+      if (Object.values(mappings).includes(fileName) || mappings[model]) {
+        return NextResponse.json(
+          { error: `persona already exists for model: ${model}` },
+          { status: 409 }
+        );
+      }
+      const target = path.join(dir, fileName);
+      let content = typeof body.addPersona.content === "string" ? body.addPersona.content : "";
+      if (!content && typeof body.addPersona.copyFrom === "string") {
+        const srcName = path.basename(body.addPersona.copyFrom);
+        const mappingsVals = Object.values(mappings);
+        if (!mappingsVals.includes(srcName)) {
+          return NextResponse.json({ error: `copyFrom is not a mapped prompt: ${srcName}` }, { status: 400 });
+        }
+        content = fs.readFileSync(path.join(dir, srcName), "utf8");
+      }
+      if (!content) {
+        return NextResponse.json(
+          { error: "addPersona needs content or copyFrom" },
+          { status: 400 }
+        );
+      }
+      if (!content.includes("RAKYAT")) {
+        return NextResponse.json(
+          { error: "persona content must contain the RAKYAT marker" },
+          { status: 400 }
+        );
+      }
+      fs.writeFileSync(target, content, "utf8");
+      // append mapping to custom-personas.json
+      const cpPath = path.join(dir, "custom-personas.json");
+      let map = {};
+      try {
+        const prev = JSON.parse(fs.readFileSync(cpPath, "utf8"));
+        if (prev && typeof prev === "object" && !Array.isArray(prev)) map = prev;
+      } catch {}
+      map[model] = fileName;
+      fs.writeFileSync(cpPath, JSON.stringify(map, null, 2), "utf8");
+      return NextResponse.json({ ok: true, model, file: fileName, bytes: content.length });
+    }
+
+    // 1c. Remove a dashboard-added persona mapping: { removePersona: model }
+    if (typeof body.removePersona === "string") {
+      const model = body.removePersona.trim();
+      const customPath = path.join(dir, "custom-personas.json");
+      let map = {};
+      let hadFile = false;
+      try {
+        const prev = JSON.parse(fs.readFileSync(customPath, "utf8"));
+        if (prev && typeof prev === "object" && !Array.isArray(prev)) map = prev;
+        hadFile = true;
+      } catch {}
+      if (!map[model]) {
+        return NextResponse.json(
+          { error: `not a dashboard-added persona: ${model} (built-in mappings cannot be removed here)` },
+          { status: 400 }
+        );
+      }
+      const fileName = map[model];
+      delete map[model];
+      if (hadFile) fs.writeFileSync(customPath, JSON.stringify(map, null, 2), "utf8");
+      else fs.writeFileSync(customPath, JSON.stringify(map, null, 2), "utf8");
+      // leave the .md file on disk — deletion of content is a separate,
+      // explicit action (the editor's save flow handles content)
+      return NextResponse.json({ ok: true, removed: model, fileKept: fileName });
     }
 
     // 2. Save prefill.json
