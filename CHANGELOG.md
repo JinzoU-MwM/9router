@@ -7,6 +7,19 @@
 - **Persona (compact artifact)**: the `-mod` prompt is now the persona project's own gateway-grade payload (`core/persona/REPLACE/GATEWAY.presidensial.md`) plus a short identity header — ~5 KB, single system message, instead of the ~24 KB doctrine composition. A/B on a live gateway (`siapa kamu?`, one run per model): compact 3/4 models adopted at ~1.5–3.7k prompt tokens, doctrine 2/4 at ~10k. The full doctrine stays in the persona repo for harness-side use.
 - **API keys**: per-key limits — allowed models (with `*` wildcards), RPM/TPM, token budget per lifetime/daily/monthly period, and expiry. Configured in the Endpoint page create/edit modal and enforced on every `/v1/*` endpoint via `authorizeApiKey`. A paused key is now refused even when "Require API key" is off.
 
+# v0.5.104 (2026-10-19)
+
+Upstream sync dari decolua/9router (v0.5.95 → v0.5.104): cherry-pick 4 commit codebuddy + bump versi.
+
+## CodeBuddy (dari upstream)
+- **CodeBuddy**: parse the 6004 rate limit error and extract `resetsAtMs` (`e706e4f2`)
+- **CodeBuddy Intl**: forward `recurring` for quota packs (#4422, `1fd208e2`); add to OAUTH_TEST_CONFIG with `tokenExists` strategy (#4232, `45d42b80`)
+- **CodeBuddy CN**: sync catalog with 2026-09-30 server config — glm-5.3/-flash maxOutput 131072, kimi-k2.8-preview K2.8 + effort low/medium/high, deepseek-v4-pro/-v4.1-flash maxOutput 393216, drop glm-5v-turbo/kimi-k2.6/kimi-k2.7 (`63de82b8`)
+
+## Rilis upstream v0.5.95–v0.5.104 (ringkasan, belum semua di-patch)
+- Features: Gemini 4 Argon (gemini/vertex/antigravity), Nous Research OAuth + free-tier, AWS Bedrock provider (#4157), per-API-key access control, Cursor IDE quota via DashboardService, anchored auto-ping schedules, model picker regex/negation search, Netlify relay proxy pool, MiniMax Code (mcode), ElevenLabs Scribe STT, Hermes per-profile config.
+- Fixes: OpenCode free tier → `/inference/v1` + v2 fingerprint, OpenCode Zen attested free-tier identity, combo fallback on HTTP 200 zero-content, translator Claude forced-SSE JSON (#4789), Gemini 4 sampling params/functionResponse ordering, Copilot embeddings routing (#4793), Codex gpt-5.5 retirement, Cursor AgentService strictProxy + empty-turn recovery, usage token fallback + stable key masking, dashboard proxy dropdown portal.
+
 # v0.5.91 (2026-09-26)
 
 ## Features
