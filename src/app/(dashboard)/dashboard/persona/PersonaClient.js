@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Card, Button, Toggle } from "@/shared/components";
+import { Card, Button, Input, Modal, Toggle } from "@/shared/components";
 
 const LEVER_META = [
   {
@@ -61,6 +61,14 @@ export default function PersonaClient() {
   const [selected, setSelected] = useState(null); // {file, content, dirty}
   const [saving, setSaving] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
+
+  // add-persona state
+  const [showAdd, setShowAdd] = useState(false);
+  const [addModel, setAddModel] = useState("");
+  const [addCopyFrom, setAddCopyFrom] = useState("");
+  const [addContent, setAddContent] = useState("");
+  const [addSaving, setAddSaving] = useState(false);
+  const [removing, setRemoving] = useState(""); // file being removed (in-flight)
 
   const flash = useCallback((msg) => {
     setNotice(msg);
@@ -135,6 +143,54 @@ export default function PersonaClient() {
     }
   };
 
+  const addPersona = async () => {
+    setAddSaving(true);
+    setError("");
+    try {
+      const payload = { addPersona: { model: addModel.trim() } };
+      if (addContent.trim()) payload.addPersona.content = addContent;
+      else if (addCopyFrom) payload.addPersona.copyFrom = addCopyFrom;
+      const res = await fetch("/api/persona", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      flash(`Persona "${j.model}" added — mapped to ${j.file}, live on next request`);
+      setShowAdd(false);
+      setAddModel("");
+      setAddCopyFrom("");
+      setAddContent("");
+      load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAddSaving(false);
+    }
+  };
+
+  const removePersona = async (model) => {
+    if (!model) return;
+    setRemoving(model);
+    setError("");
+    try {
+      const res = await fetch("/api/persona", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ removePersona: model }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      flash(`Persona "${model}"" unmapped — no longer injected. Prompt file ${j.fileKept} kept on disk.`);
+      load();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRemoving("");
+    }
+  };
+
   return (
     <div className="space-y-4 p-4 max-w-5xl mx-auto">
       <div className="flex items-center justify-between">
@@ -145,9 +201,12 @@ export default function PersonaClient() {
             levers, few-shot prefill. Prompt files hot-reload on mtime; no restart needed.
           </p>
         </div>
-        <Button onClick={load} disabled={loading}>
-          {loading ? "Loading…" : "Refresh"}
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={() => setShowAdd(true)}>+ Add Persona</Button>
+          <Button onClick={load} disabled={loading}>
+            {loading ? "Loading…" : "Refresh"}
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -204,9 +263,12 @@ export default function PersonaClient() {
       <Card className="p-4">
         <h2 className="mb-1 font-medium">Persona Prompts</h2>
         <p className="mb-3 text-xs opacity-60">
-          Directory: <code className="opacity-80">{data?.promptsDir || "…"}</code>. One identity
-          family, per-model variants. Mapping model → file is fixed in{" "}
-          <code className="opacity-80">open-sse/rtk/customPrompt.js</code>.
+          Directory: <code className="opacity-80">{data?.promptsDir || "…"}</code>. Built-in
+          mappings live in <code className="opacity-80">open-sse/rtk/customPrompt.js</code>;
+          dashboard-added mappings in{" "}
+          <code className="opacity-80">custom-personas.json</code> (same directory). To use a
+          persona: create a combo named exactly like the model id (e.g.{" "}
+          <code className="opacity-80">muse-mod</code>) — requests through it get the persona.
         </p>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -224,6 +286,11 @@ export default function PersonaClient() {
                 <tr key={f.file} className="border-b border-white/5">
                   <td className="py-2 pr-3 font-mono text-xs">
                     {f.file}
+                    {f.custom && (
+                      <span className="ml-2 rounded bg-blue-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-blue-400">
+                        added
+                      </span>
+                    )}
                     <div className="opacity-50">{f.firstLine}</div>
                   </td>
                   <td className="py-2 pr-3">
@@ -242,8 +309,18 @@ export default function PersonaClient() {
                   <td className="py-2 pr-3 whitespace-nowrap text-xs opacity-70">
                     {fmtTime(f.mtimeMs)}
                   </td>
-                  <td className="py-2 text-right">
-                    <Button onClick={() => openEditor(f.file)}>Edit</Button>
+                  <td className="py-2 text-right whitespace-nowrap">
+                    <div className="flex justify-end gap-2">
+                      <Button onClick={() => openEditor(f.file)}>Edit</Button>
+                      {f.custom && (
+                        <Button
+                          onClick={() => removePersona(f.models[0])}
+                          disabled={removing === f.models[0]}
+                        >
+                          {removing === f.models[0] ? "…" : "Remove"}
+                        </Button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -320,6 +397,81 @@ export default function PersonaClient() {
           </div>
         </div>
       )}
+      {/* Add persona modal */}
+      <Modal
+        isOpen={showAdd}
+        onClose={() => setShowAdd(false)}
+        title="Add Persona"
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide opacity-70">
+              Model / combo name
+            </label>
+            <Input
+              value={addModel}
+              onChange={(e) => setAddModel(e.target.value)}
+              placeholder="muse-mod"
+              className="font-mono"
+            />
+            <p className="mt-1 text-xs opacity-60">
+              Requests whose model (or combo name) matches this id get the persona. Create a
+              combo with this exact name in Combo &amp; Vision Adapter to route traffic through
+              it. Allowed: letters, digits, <code>-</code>, <code>_</code>, <code>.</code>.
+            </p>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium uppercase tracking-wide opacity-70">
+              Template (copy from)
+            </label>
+            <select
+              value={addCopyFrom}
+              onChange={(e) => setAddCopyFrom(e.target.value)}
+              className="w-full rounded border border-white/10 bg-neutral-900 px-2 py-1.5 font-mono text-sm"
+            >
+              <option value="">— empty file (write from scratch) —</option>
+              {(data?.files || []).map((f) => (
+                <option key={f.file} value={f.file}>
+                  {f.file}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs opacity-60">
+              Copy an existing persona as the starting point, then edit it. Leave empty to start
+              blank.
+            </p>
+          </div>
+          {!addCopyFrom && (
+            <div>
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wide opacity-70">
+                Initial content (optional)
+              </label>
+              <textarea
+                value={addContent}
+                onChange={(e) => setAddContent(e.target.value)}
+                rows={6}
+                className="w-full resize-y rounded border border-white/10 bg-neutral-950 p-2 font-mono text-xs"
+                placeholder="Paste a persona body here, or leave empty and edit after adding."
+                spellCheck={false}
+              />
+            </div>
+          )}
+          {addModel && !/[a-zA-Z0-9_.\-]/.test(addModel.trim().slice(0, 1)) && (
+            <div className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-400">
+              Model id harus mulai dengan huruf/angka/-/_/.
+            </div>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <Button onClick={() => setShowAdd(false)}>Cancel</Button>
+            <Button
+              onClick={addPersona}
+              disabled={addSaving || !addModel.trim()}
+            >
+              {addSaving ? "Adding…" : "Add"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

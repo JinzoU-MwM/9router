@@ -242,6 +242,42 @@ function splitPromptParts(prompt, maxLen) {
   return parts;
 }
 
+// Dashboard-added persona mappings: <PROMPTS_DIR>/custom-personas.json —
+// { "muse-mod": "muse-mod.md", ... }. Fail-open: any read/parse problem returns
+// {} and only the built-in CUSTOM_PROMPTS mapping applies. mtime-cached like
+// the prompt files themselves (no restart needed after the dashboard writes it).
+const customCache = { mtime: -1, map: {} };
+export function loadCustomPersonas() {
+  let st;
+  try {
+    st = fs.statSync(path.join(PROMPTS_DIR, "custom-personas.json"));
+  } catch {
+    customCache.mtime = -1;
+    customCache.map = {};
+    return customCache.map;
+  }
+  if (customCache.mtime === st.mtimeMs) return customCache.map;
+  let map = {};
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(PROMPTS_DIR, "custom-personas.json"), "utf8"));
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      for (const [model, file] of Object.entries(raw)) {
+        // strict shape: string model id, plain .md basename (no traversal)
+        if (
+          typeof model === "string" && model.trim() && model === model.trim() &&
+          typeof file === "string" && file.endsWith(".md") &&
+          file === path.basename(file) && !file.includes("/")
+        ) {
+          map[model] = file;
+        }
+      }
+    }
+  } catch {}
+  customCache.mtime = st.mtimeMs;
+  customCache.map = map;
+  return map;
+}
+
 // User-authored custom prompt (settings-backed). Kept separate from the
 // per-model persona path above: this one appends whatever text the operator
 // configured in the Token Saver page, independent of the built-in savers.
@@ -255,7 +291,12 @@ export function injectCustomPrompt(body, format, model, requestModel) {
   // Combo requests resolve to underlying provider/model before reaching here
   // (e.g. combo "glm-5.3-mod" → "guts/glm-5.3" → model "glm-5.3"), so match on
   // the client-requested model name first, then the resolved model name.
-  const file = CUSTOM_PROMPTS[requestModel] || CUSTOM_PROMPTS[model];
+  const custom = loadCustomPersonas();
+  const file =
+    CUSTOM_PROMPTS[requestModel] ||
+    CUSTOM_PROMPTS[model] ||
+    custom[requestModel] ||
+    custom[model];
   if (!file) return;
   const rawPrompt = loadPrompt(file);
   if (!rawPrompt) return;

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
-import { CUSTOM_PROMPTS } from "open-sse/rtk/customPrompt.js";
+import { CUSTOM_PROMPTS, loadCustomPersonas } from "open-sse/rtk/customPrompt.js";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -27,7 +27,11 @@ export async function GET(request) {
   try {
     const name = new URL(request.url).searchParams.get("name") || "";
     const safeName = path.basename(name); // no traversal (CWE-22)
-    if (!Object.values(CUSTOM_PROMPTS).includes(safeName)) {
+    const allowed = new Set([
+      ...Object.values(CUSTOM_PROMPTS),
+      ...Object.values(loadCustomPersonas()),
+    ]);
+    if (!allowed.has(safeName)) {
       return NextResponse.json(
         { error: `file is not a mapped persona prompt: ${safeName}` },
         { status: 400 }
