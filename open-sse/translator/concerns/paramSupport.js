@@ -91,3 +91,32 @@ export function stripUnsupportedParams(provider, model, body) {
   }
   return body;
 }
+
+// Normalize the max-output-token field for user-added OpenAI-compatible nodes.
+// Many compatible servers (Ollama, llama.cpp, LM Studio, older vLLM) read only
+// `max_tokens` and silently fall back to their own default — Ollama's default
+// `num_predict` is 1024 — when the client sends `max_completion_tokens`. Clients
+// such as OMP send `max_completion_tokens`, so those gateways truncate every
+// response at 1024 tokens even though the model advertises 64000.
+//
+// Default target is `max_tokens`. A node whose upstream requires the newer field
+// opts out with providerSpecificData.maxTokensField="max_completion_tokens".
+export function normalizeMaxTokensField(provider, model, body, credentials) {
+  if (typeof provider !== "string" || !provider.startsWith("openai-compatible-")) return body;
+  if (!body || typeof body !== "object") return body;
+
+  const target = credentials?.providerSpecificData?.maxTokensField === "max_completion_tokens"
+    ? "max_completion_tokens"
+    : "max_tokens";
+  const source = target === "max_tokens" ? "max_completion_tokens" : "max_tokens";
+
+  if (body[target] === undefined && typeof body[source] === "number" && Number.isFinite(body[source])) {
+    body[target] = body[source];
+  }
+  // Never send both: strict validators reject the sibling field.
+  if (body[target] !== undefined && body[source] !== undefined) delete body[source];
+
+  const ceiling = getCapabilitiesForModel(provider, model).maxOutput;
+  if (Number.isFinite(ceiling) && ceiling > 0) clampNumber(body, target, ceiling);
+  return body;
+}

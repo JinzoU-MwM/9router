@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { stripUnsupportedParams } from "../../open-sse/translator/concerns/paramSupport.js";
+import { stripUnsupportedParams, normalizeMaxTokensField } from "../../open-sse/translator/concerns/paramSupport.js";
 
 describe("stripUnsupportedParams", () => {
   it("flattens Cloudflare AI OpenAI content-part arrays", () => {
@@ -95,5 +95,53 @@ describe("stripUnsupportedParams", () => {
     stripUnsupportedParams("openrouter", "nvidia/nemotron-3-ultra-550b-a55b:free", body);
 
     expect(body.messages[0].reasoning_content).toBe("thinking...");
+  });
+});
+
+describe("normalizeMaxTokensField", () => {
+  const PROVIDER = "openai-compatible-chat-492eb97c-f3ff-48ae-b46d-5a68c05bbff6";
+
+  it("translates max_completion_tokens to max_tokens for openai-compatible nodes", () => {
+    const body = { max_completion_tokens: 1024 };
+
+    normalizeMaxTokensField(PROVIDER, "qwen35-9b-fast:latest", body, null);
+
+    expect(body.max_tokens).toBe(1024);
+    expect(body.max_completion_tokens).toBeUndefined();
+  });
+
+  it("keeps max_tokens when the client already sent it and drops the sibling", () => {
+    const body = { max_tokens: 4096, max_completion_tokens: 1024 };
+
+    normalizeMaxTokensField(PROVIDER, "qwen35-9b-fast:latest", body, null);
+
+    expect(body.max_tokens).toBe(4096);
+    expect(body.max_completion_tokens).toBeUndefined();
+  });
+
+  it("honours the per-node maxTokensField opt-out", () => {
+    const body = { max_tokens: 2048 };
+    const credentials = { providerSpecificData: { maxTokensField: "max_completion_tokens" } };
+
+    normalizeMaxTokensField(PROVIDER, "gpt-5.6-sol", body, credentials);
+
+    expect(body.max_completion_tokens).toBe(2048);
+    expect(body.max_tokens).toBeUndefined();
+  });
+
+  it("clamps the translated field to the model output ceiling", () => {
+    const body = { max_completion_tokens: 500000 };
+
+    normalizeMaxTokensField(PROVIDER, "qwen35-9b-fast:latest", body, null);
+
+    expect(body.max_tokens).toBe(64000);
+  });
+
+  it("leaves non-compatible providers untouched", () => {
+    const body = { max_completion_tokens: 1024 };
+
+    normalizeMaxTokensField("openai", "gpt-5.6-sol", body, null);
+
+    expect(body).toEqual({ max_completion_tokens: 1024 });
   });
 });
