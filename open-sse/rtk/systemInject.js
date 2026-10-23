@@ -69,13 +69,13 @@ function prefixGeminiUserTurn(host, prefix, has) {
 // order, after any existing system content. Used for large persona documents
 // where a single message would breach upstream per-message limits or dilute
 // instruction adherence. Idempotent per part via the same exact-match scan.
-export function injectSystemPromptParts(body, format, parts) {
+export function injectSystemPromptParts(body, format, parts, options = {}) {
   try {
     if (!body || !Array.isArray(parts) || parts.length === 0) return;
     if (typeof body !== "object") return;
     for (const part of parts) {
       if (typeof part !== "string" || !part) continue;
-      injectSystemPrompt(body, format, part);
+      injectSystemPrompt(body, format, part, options);
     }
   } catch (_) {
     // fail-open
@@ -218,7 +218,7 @@ export function injectFewShot(body, format, turns) {
   return false;
 }
 
-export function injectSystemPrompt(body, format, prompt) {
+export function injectSystemPrompt(body, format, prompt, options = {}) {
   try {
     if (!body || !prompt) return;
     if (typeof body !== "object") return;
@@ -249,7 +249,7 @@ export function injectSystemPrompt(body, format, prompt) {
       return;
     }
     if (Array.isArray(body.messages)) {
-      injectChatSystem(body, prompt);
+      injectChatSystem(body, prompt, options);
       return;
     }
     if (Array.isArray(body.input)) {
@@ -305,13 +305,25 @@ function injectInstructionsSystem(body, prompt) {
 }
 
 // ---- Chat messages[] ----
-function injectChatSystem(body, prompt) {
+function injectChatSystem(body, prompt, options = {}) {
   try {
     const arr = body.messages;
     if (!Array.isArray(arr)) return;
     // Exact idempotency: scan existing system/developer content for full prompt
     if (containsPromptInMessages(arr, prompt)) return;
-    // Insert as a SEPARATE system message after the last existing system/developer
+    if (options.separate === false) {
+      // Explicit opt-out (user-authored prompt in the Token Saver settings):
+      // append into the first existing system/developer message, or create one
+      // at the head — upstream's shape.
+      let first = -1;
+      try {
+        first = arr.findIndex((m) => m && (m.role === ROLE.SYSTEM || m.role === ROLE.DEVELOPER));
+      } catch (_) { return; }
+      if (first >= 0) appendToChatMessage(arr[first], prompt);
+      else { try { arr.unshift({ role: ROLE.SYSTEM, content: prompt }); } catch (_) {} }
+      return;
+    }
+    // Persona path: insert as a SEPARATE system message after the last existing system/developer
     // message. Appending into the existing system message can push a single
     // message past upstream per-message size limits (observed: providers drop
     // whole system messages above ~2-3KB), which silently deletes the persona.

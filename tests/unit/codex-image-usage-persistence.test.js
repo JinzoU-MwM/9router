@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/sse/services/auth.js", () => ({
+  authorizeApiKey: async () => null,
   getProviderCredentials: async () => ({
     accessToken: "provider-token",
     connectionId: "connection-a",

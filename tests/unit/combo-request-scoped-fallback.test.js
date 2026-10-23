@@ -33,6 +33,7 @@ describe("combo fallback — request-scoped 4xx from a member", () => {
       shouldFallback: false,
       cooldownMs: 0,
       requestScoped: true,
+      scope: "none",
     });
   });
 

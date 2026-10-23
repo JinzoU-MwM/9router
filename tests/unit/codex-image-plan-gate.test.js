@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../src/sse/services/auth.js", () => ({
+  authorizeApiKey: async () => null,
   getProviderCredentials: async (_provider, excludeConnectionIds) =>
     mocks.connections.find((c) => !excludeConnectionIds.has(c.connectionId)) || null,
   markAccountUnavailable: mocks.markAccountUnavailable,

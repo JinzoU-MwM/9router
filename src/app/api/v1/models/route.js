@@ -482,7 +482,6 @@ export async function buildModelsList(kindFilter, options = {}) {
     await Promise.all(tasks);
     dynamicCatalogs.set(providerId, catalog);
   }));
->>>>>>> 99ea39a9 (fix(providers): scope cooldowns to the credential, cache model catalogs)
 
   const models = [];
   const combosByName = new Map(

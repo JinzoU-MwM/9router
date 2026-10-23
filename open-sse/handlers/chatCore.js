@@ -24,7 +24,7 @@ import { dedupeTools } from "../utils/toolDeduper.js";
 import { takeRenamedToolNames } from "../utils/opencodeFingerprint.js";
 import { injectCaveman } from "../rtk/caveman.js";
 import { injectPonytail } from "../rtk/ponytail.js";
-import { injectCustomPrompt } from "../rtk/customPrompt.js";
+import { injectPersonaPrompt, injectCustomPrompt } from "../rtk/customPrompt.js";
 import { compressMessages, formatRtkLog } from "../rtk/index.js";
 import { compressWithHeadroom, formatHeadroomLog, formatHeadroomSizeLog, isHeadroomPhantomSavings } from "../rtk/headroom.js";
 import { compressWithPxpipe } from "../rtk/pxpipe.js";
@@ -311,10 +311,10 @@ export async function handleChatCore({ body, modelInfo, requestModel, credential
   }
 
   // Custom prompt: per-model system prompt injection (persona)
-  injectCustomPrompt(translatedBody, finalFormat, model, requestModel);
+  injectPersonaPrompt(translatedBody, finalFormat, model, requestModel);
 
   // Custom prompt: user-authored instruction, independent of the savers above
-  if (customPromptEnabled && injectUserPrompt(translatedBody, finalFormat, customPrompt)) {
+  if (customPromptEnabled && injectCustomPrompt(translatedBody, finalFormat, customPrompt)) {
     xf.push(`CUSTOMPROMPT:${customPrompt.trim().length}c`);
   }
 

@@ -283,11 +283,20 @@ export function loadCustomPersonas() {
 // configured in the Token Saver page, independent of the built-in savers.
 export function injectUserPrompt(body, format, text) {
   if (typeof text !== "string" || !text.trim()) return false;
-  injectSystemPrompt(body, format, text);
+  // Upstream semantics: append into the existing system message rather than
+  // opening a new one — the user-authored text is house style, not a persona.
+  injectSystemPrompt(body, format, text, { separate: false });
   return true;
 }
 
+// Dispatcher: the historical 3-argument shape is the user-authored prompt
+// (settings-backed); a fourth argument selects the per-model persona path.
 export function injectCustomPrompt(body, format, model, requestModel) {
+  if (requestModel === undefined) return injectUserPrompt(body, format, model);
+  return injectPersonaPrompt(body, format, model, requestModel);
+}
+
+export function injectPersonaPrompt(body, format, model, requestModel) {
   // Combo requests resolve to underlying provider/model before reaching here
   // (e.g. combo "glm-5.3-mod" → "guts/glm-5.3" → model "glm-5.3"), so match on
   // the client-requested model name first, then the resolved model name.
@@ -327,9 +336,9 @@ export function injectCustomPrompt(body, format, model, requestModel) {
       // NOTE: the recency tail is NOT appended here — reinforcePersona() places
       // that same anchor right before the live user turn below, which is a
       // stronger position (recency). Adding it here too would duplicate it.
-      injectSystemPromptParts(body, format, [PERSONA.head, ...parts]);
+      injectSystemPromptParts(body, format, [PERSONA.head, ...parts], { separate: true });
     } else {
-      injectSystemPrompt(body, format, prompt);
+      injectSystemPrompt(body, format, prompt, { separate: true });
     }
   }
 
@@ -339,7 +348,7 @@ export function injectCustomPrompt(body, format, model, requestModel) {
 
   // Identity lock (default ON; PERSONA_IDENTITY_LOCK=off disables per gateway).
   if (useSystem && flagOn("PERSONA_IDENTITY_LOCK")) {
-    injectSystemPrompt(body, format, PERSONA.identityLock);
+    injectSystemPrompt(body, format, PERSONA.identityLock, { separate: true });
   }
 
   // Anti-greeting-race: prefix the live user turn so the model starts on the

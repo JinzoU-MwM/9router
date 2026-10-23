@@ -31,7 +31,7 @@ afterEach(() => {
 describe("CodeBuddy Intl block backoff (#5024)", () => {
   it.each(["11128:request illegal", "conversation id missing"])("backs off for %s", (msg) => {
     expect(checkFallbackError(400, { code: 11128, msg }, 0, "codebuddy-intl")).toEqual({
-      shouldFallback: true, cooldownMs: BACKOFF_CONFIG.base, newBackoffLevel: 1,
+      shouldFallback: true, cooldownMs: BACKOFF_CONFIG.base, newBackoffLevel: 1, scope: "model",
     });
   });
 
@@ -40,17 +40,17 @@ describe("CodeBuddy Intl block backoff (#5024)", () => {
       checkFallbackError(400, "request illegal", level, "codebuddy-intl").cooldownMs,
     )).toEqual([BACKOFF_CONFIG.base, BACKOFF_CONFIG.base * 2, BACKOFF_CONFIG.base * 4]);
     expect(checkFallbackError(400, "request illegal", BACKOFF_CONFIG.maxLevel, "codebuddy-intl"))
-      .toEqual({ shouldFallback: true, cooldownMs: BACKOFF_CONFIG.max, newBackoffLevel: BACKOFF_CONFIG.maxLevel });
+      .toEqual({ shouldFallback: true, cooldownMs: BACKOFF_CONFIG.max, newBackoffLevel: BACKOFF_CONFIG.maxLevel, scope: "model" });
   });
 
   it.each(["openai", "codebuddy-cn", null])("keeps the same text request-scoped for provider %s", (provider) => {
     expect(checkFallbackError(400, "request illegal", 0, provider))
-      .toEqual({ shouldFallback: false, cooldownMs: 0 });
+      .toEqual({ shouldFallback: false, cooldownMs: 0, requestScoped: true, scope: "none" });
   });
 
   it("does not classify every 11128 code as a block", () => {
     expect(checkFallbackError(400, { code: 11128, msg: "first message is not system prompt" }, 0, "codebuddy-intl"))
-      .toEqual({ shouldFallback: false, cooldownMs: 0 });
+      .toEqual({ shouldFallback: false, cooldownMs: 0, requestScoped: true, scope: "none" });
   });
 
   it("persists the account cooldown and incremented backoff level through the cbai alias", async () => {
@@ -82,16 +82,19 @@ describe("CodeBuddy Intl block backoff (#5024)", () => {
     ]);
   });
 
-  it("still stops a combo on a malformed CodeBuddy request", async () => {
+  it("advances past a malformed CodeBuddy request without cooling the account", async () => {
+    // Upstream v0.5.109 (#5057): a request-scoped 4xx advances the combo instead
+    // of ending it — the failure says nothing about the credential.
     const error = Response.json({ error: { message: "first message is not system prompt" } }, { status: 400 });
-    const dispatch = vi.fn().mockResolvedValue(error);
+    const backup = Response.json({ choices: [{ message: { content: "backup response" } }] });
+    const dispatch = vi.fn().mockResolvedValueOnce(error).mockResolvedValueOnce(backup);
     const result = await handleComboChat({
       body: { messages: [] }, models: ["cbai/test-model", "openai/backup-model"],
       handleSingleModel: dispatch, log: { info: vi.fn(), warn: vi.fn() },
       comboName: "malformed-combo", comboStrategy: "fallback",
     });
-    expect(result).toBe(error);
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(result).toBe(backup);
+    expect(dispatch).toHaveBeenCalledTimes(2);
     expect(db.updateProviderConnection).not.toHaveBeenCalled();
   });
 });

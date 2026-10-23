@@ -177,7 +177,10 @@ describe("DB Concurrency — atomic safety", () => {
     expect(g.completionTokens).toBe(N * 50);
   });
 
-  it("records an identical write saved twice in parallel only once", async () => {
+  // The content-based dedupe is gone on purpose: two requests that finish in the
+  // same millisecond carry the same ISO timestamp and often the same token
+  // counts, so collapsing them silently dropped real traffic.
+  it("records both writes when two identical entries land in parallel", async () => {
     const entry = () => ({
       timestamp: tsFor(3000), provider: "mistral", model: "dup-model", connectionId: "cD",
       tokens: { prompt_tokens: 7, completion_tokens: 3 }, status: "ok",
@@ -185,6 +188,6 @@ describe("DB Concurrency — atomic safety", () => {
     await Promise.all([db.saveRequestUsage(entry()), db.saveRequestUsage(entry())]);
 
     const stats = await db.getUsageStats("24h");
-    expect(stats.byProvider.mistral.requests).toBe(1);
+    expect(stats.byProvider.mistral.requests).toBe(2);
   });
 });
