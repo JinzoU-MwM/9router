@@ -34,9 +34,8 @@ describe("glm registry entry (dual-auth)", () => {
   it("keeps the direct api.z.ai anthropic transport (no separate gateway)", () => {
     expect(TRANSPORTS.glm.baseUrl).toBe(ANTHROPIC_URL);
     expect(TRANSPORTS.glm.auth.header).toBe("x-api-key");
-    // Fork divergence: the zcode bridge provider is kept on purpose (it points
-    // at a local zcode-proxy on 127.0.0.1:8099 for coding-plan keys). It carries
-    // no OAuth grant — Z.ai login itself stays on the glm provider above.
+    // no zcode gateway/hook leftovers (the fork's old local-proxy bridge is gone)
+    expect(TRANSPORTS.zcode).toBeUndefined();
     expect(PROVIDER_OAUTH.zcode).toBeUndefined();
   });
 
