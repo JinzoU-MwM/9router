@@ -37,6 +37,10 @@ vi.mock("@/sse/services/auth.js", () => ({
     return a?.startsWith("Bearer ") ? a.slice(7) : request.headers.get("x-api-key");
   },
   isValidApiKey: async () => true,
+  // Per-key limit gate is a separate layer (authorizeApiKey) and a separate
+  // model filter (filterModelsForApiKey): these tests exercise key access only.
+  authorizeApiKey: async () => null,
+  filterModelsForApiKey: async (_request, models) => models,
 }));
 vi.mock("@/sse/services/tokenRefresh.js", () => ({
   checkAndRefreshToken: async (_p, c) => c,

@@ -135,7 +135,12 @@ describe("Gemini native v1beta endpoint", () => {
     const names = body.models.map((m) => m.name);
 
     expect(mocks.filterModelsForApiKey).toHaveBeenCalledWith(request, expect.any(Array));
-    expect(names).toEqual(["models/gemini/gemini-2.5-pro", "models/gemini-2.5-pro"]);
+    // The catalog also seeds no-auth free providers (upstream /v1/models), so
+    // scope this assertion to the connection's own provider.
+    expect(names.filter((n) => n.includes("gemini"))).toEqual([
+      "models/gemini/gemini-2.5-pro",
+      "models/gemini-2.5-pro",
+    ]);
   });
 
   it("returns only what filterModelsForApiKey leaves, so a key allowlist narrows the list", async () => {
