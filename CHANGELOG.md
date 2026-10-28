@@ -7,6 +7,24 @@
 - **Persona (compact artifact)**: the `-mod` prompt is now the persona project's own gateway-grade payload (`core/persona/REPLACE/GATEWAY.presidensial.md`) plus a short identity header — ~5 KB, single system message, instead of the ~24 KB doctrine composition. A/B on a live gateway (`siapa kamu?`, one run per model): compact 3/4 models adopted at ~1.5–3.7k prompt tokens, doctrine 2/4 at ~10k. The full doctrine stays in the persona repo for harness-side use.
 - **API keys**: per-key limits — allowed models (with `*` wildcards), RPM/TPM, token budget per lifetime/daily/monthly period, and expiry. Configured in the Endpoint page create/edit modal and enforced on every `/v1/*` endpoint via `authorizeApiKey`. A paused key is now refused even when "Require API key" is off.
 
+# v0.5.112 (2026-10-28)
+
+## Features
+- **MiniMax Code**: add lease auth mode that rides the desktop app's sign-in through a named-pipe/unix-socket broker (length-prefixed JSON protocol, broker-owned token refresh — no refresh token held locally since MiniMax tokens are single-use), with a dashboard lease button and usage attribution
+- **Nace Drex**: add the `nace` provider to the System One lane with `drex`, `drex-v2.0` and `drex-max`
+- **CommandCode**: align request headers with the official CLI 1.88.0 through a shared `commandCodeHeaders` service
+- **Codex**: add `gpt-6.1-terra` (responses-lite lane, GPT-6-Lite thinking levels)
+
+## Fixes
+- **NVIDIA NIM**: normalize assistant `reasoning` aliases to `reasoning_content` before forwarding, avoiding NIM's duplicate-field 400 when clients send both.
+- **Lazy Runtime**: make the on-demand wreq-js/playwright-core installer work inside published builds — fetch `createRequire` at runtime instead of the bundler-stubbed static import, mark the runtime-dir `import()` calls `webpackIgnore` so file URLs are not captured as bundle chunks, anchor npm to the runtime dir with a minimal `package.json`, and wipe + reinstall once when npm exits 0 on a partially-extracted package (#5245)
+- **Docker**: bake `wreq-js` and `playwright-core` into the runner image's `node_modules` (builder-stage isolated install) so OpenCode Free resolves without runtime downloads (#5245)
+- **Chat**: surface upstream SSE `error` frames in non-streaming responses — answer with the upstream status (4xx/5xx) and message instead of swallowing them into a generic 502
+- **Translator**: enforce Gemini protobuf type predicates on schema `items` and `properties` instead of forwarding shapes the upstream would silently mistype
+- **Providers**: keep full `LLM|id|secret` (Muse) key strings opaque in bulk-add instead of splitting on the first pipe into name/key, auto-naming them LLM 1, LLM 2, …
+- **DeepSeek**: replace the vendored PoW hash implementation with a noble-hashes keccak port (DeepSeekHashV1, SHA3-256 with round 0 skipped), shrinking `deepseek-pow-hash.js` by ~430 lines
+- **GitHub Copilot**: apply Claude 5.5 thinking rules to Copilot's dotted model ids (`claude-opus-5.5*`, `claude-sonnet-5.5`) and make `claude-haiku-5.5` adaptive-only on its Anthropic-native shim, whose budget-shaped thinking comes back 400
+
 # v0.5.111 (2026-10-26)
 
 ## Features
