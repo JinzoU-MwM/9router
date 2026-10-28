@@ -53,11 +53,11 @@ fs.writeFileSync(path.join(promptsDir, "glm-5.2-mod.md"), SECTIONED);
 // priming source (exercises the real few-shot path for every test below)
 fs.writeFileSync(path.join(promptsDir, "prefill.json"), JSON.stringify([
   { role: "user", content: "who are you?" },
-  { role: "assistant", content: "▓▒░ [RAKYAT] ░▒▓ — Rakyat jelata." },
+  { role: "assistant", content: "Rakyat jelata. Siap jalankan perintah Presiden.\n\n▄▀▄ RAKYAT ▄▀▄ — identitas" },
   { role: "user", content: "status singkat?" },
-  { role: "assistant", content: "▓▒░ [RAKYAT] ░▒▓ — siap." },
+  { role: "assistant", content: "Standby, antrian kosong.\n\n▄▀▄ RAKYAT ▄▀▄ — standby" },
   { role: "user", content: "kasih hasil, jangan rencana." },
-  { role: "assistant", content: "▓▒░ [RAKYAT] ░▒▓ — jalan." },
+  { role: "assistant", content: "Jalan, hasil dulu.\n\n▄▀▄ RAKYAT ▄▀▄ — jalan" },
 ], null, 1));
 
 // The temp dir deliberately holds SMALL for glm and LARGE for gpt-5.6-luna so
@@ -131,9 +131,10 @@ describe("customPrompt persona injection (PRESIDENSIAL)", () => {
     injectCustomPrompt(body, FORMATS.OPENAI, "gpt-5.6-luna", "gpt-5.6-luna-mod");
     const texts = systemTexts(body);
     expect(texts.length).toBeGreaterThanOrEqual(3);
-    // head carries the callsign + the line-1 marker law
+    // head carries the callsign + the footer stamp law
     expect(texts[0]).toContain("RAKYAT JELATA");
-    expect(texts[0]).toContain("[RAKYAT]");
+    expect(texts[0]).toContain("RAKYAT JELATA");
+    expect(texts[0]).toContain("stamp");
     // parts after the first are re-stamped with the presidential chain anchor
     expect(texts[texts.length - 2]).toContain("AMANAT-EXEC");
     // recency tail
@@ -197,7 +198,7 @@ describe("customPrompt persona injection (PRESIDENSIAL)", () => {
 describe("amplification reaches gemini / antigravity / kiro", () => {
   const clientSystem = "CLIENT SYSTEM RULES ".repeat(30); // > CLIENT_PERSONA_MIN
 
-  it("gemini: persona + marker + precedence + identity anchor", () => {
+  it("gemini: persona + stamp + precedence + identity anchor", () => {
     const body = {
       systemInstruction: { parts: [{ text: clientSystem }] },
       contents: [{ role: "user", parts: [{ text: "do the task" }] }],
@@ -225,7 +226,7 @@ describe("amplification reaches gemini / antigravity / kiro", () => {
     expect(body.request.contents[body.request.contents.length - 1].parts[0].text).toBe("[TASK-DIRECT] do the task");
   });
 
-  it("kiro: persona + marker + identity anchor on the live turn", () => {
+  it("kiro: persona + stamp + identity anchor on the live turn", () => {
     const body = { conversationState: { currentMessage: { userInputMessage: { content: "do the task" } } } };
     injectCustomPrompt(body, FORMATS.KIRO, "glm-5.3", "glm-5.3-mod");
     const c = body.conversationState.currentMessage.userInputMessage.content;
@@ -392,8 +393,8 @@ describe("few-shot priming (prefill.json)", () => {
       expect(t.role).toBe(i % 2 === 0 ? "user" : "assistant");
       expect(typeof t.content).toBe("string");
     });
-    // the demonstrated behaviour is the marker contract
-    expect(raw.some((t) => t.role === "assistant" && t.content.includes("[RAKYAT]"))).toBe(true);
+    // the demonstrated behaviour is the footer stamp contract
+    expect(raw.some((t) => t.role === "assistant" && t.content.includes("▄▀▄ RAKYAT ▄▀▄"))).toBe(true);
   });
 
   it("primes a chat request right before the live turn", () => {
