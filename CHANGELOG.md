@@ -189,7 +189,7 @@
 - **Codebuddy**: parse the 6004 rate limit error and extract `resetsAtMs`; forward `recurring` for codebuddy-intl quota packs (#4422)
 - **CLI Tools**: replace `sk_9router` placeholder with first active dashboard API key
 - **Dashboard**: exclude hidden providers from usage stats provider list
-- **Capabilities**: add deepseek-v4-1-flash vision alias; add zed to live catalog providers>>>>>>> 5bbed259 (docs(keys): document per-API-key limits)
+- **Capabilities**: add deepseek-v4-1-flash vision alias; add zed to live catalog providers
 
 # v0.5.91 (2026-09-26)
 
