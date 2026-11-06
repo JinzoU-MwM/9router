@@ -34,9 +34,11 @@ export class CodeBuddyExecutor extends DefaultExecutor {
 
   buildHeaders(credentials, stream = true, url, model, body = null) {
     const headers = super.buildHeaders(credentials, true, url, model, body);
+    // Upstream v0.5.112 (3fd925ab): one request id is shared across
+    // X-Request-ID / X-Conversation-Request-ID / X-Conversation-Message-ID;
+    // only the conversation id is its own uuid.
     const reqId = crypto.randomUUID().replace(/-/g, "");
     const convId = crypto.randomUUID();
-    const convReqId = crypto.randomUUID().replace(/-/g, "");
     const domain =
       credentials?.providerSpecificData?.domain ||
       (this.provider === "codebuddy-cn" ? "copilot.tencent.com" : "www.codebuddy.ai");
@@ -66,7 +68,7 @@ export class CodeBuddyExecutor extends DefaultExecutor {
       "X-Stainless-Retry-Count": "0",
       "X-Request-ID": reqId,
       "X-Conversation-ID": convId,
-      "X-Conversation-Request-ID": convReqId,
+      "X-Conversation-Request-ID": reqId,
       "X-Conversation-Message-ID": reqId,
       "X-Agent-Intent": "craft",
       "X-Agent-Purpose": "conversation",

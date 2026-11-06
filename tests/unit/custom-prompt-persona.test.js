@@ -354,7 +354,7 @@ describe("shipped persona prompts carry the per-family calibration", () => {
     ["kimi", /^kimi-/],
     ["deepseek", /^deepseek-/],
   ];
-  const read = (f) => fs.readFileSync(path.join(dir, f), "utf8");
+  const read = (f) => fs.readFileSync(path.join(dir, f), "utf8").replace(/\r\n/g, "\n"); // CRLF-safe: git autocrlf checkout
 
   it("is no longer one payload for every model", () => {
     const unique = new Set(files.map(read));
